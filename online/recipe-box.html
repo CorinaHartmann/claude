@@ -188,6 +188,11 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 .ex { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tomato); }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2s; } }
 
+.servings { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.servings button { border: 0; background: none; width: 40px; height: 38px; font-size: 22px; font-weight: 700; color: var(--accent); cursor: pointer; border-radius: 999px; }
+.servings button:disabled { color: var(--line); cursor: default; }
+.servings .sv { min-width: 96px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; padding-inline: 2px; }
+
 /* Cooking mode */
 .cook-start { width: 100%; padding: 14px; font-size: 17px; border-radius: 14px; }
 .cook { position: fixed; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -356,10 +361,23 @@ function fmtQty(n) {
   const k = n >= 10 ? 10 : 100;
   return String(Math.round(n * k) / k);
 }
+// Round scaled amounts the way you'd measure them: 112.5 g -> 115 g, 4.8 eggs -> 5 eggs, 1.8 cups -> 1¾ cups.
+const MEASURED = /^\s*(g|kg|mg|ml|cl|dl|l|oz|lb|cups?|tbsp|tsp|EL|TL|Msp\.?|Pck\.?|Prisen?|pinch(es)?|dash(es)?|stick(s)?|cans?|Dosen?|Becher|Bund|bunch(es)?|handful|Handvoll)\b/i;
+function niceAmount(v, rest) {
+  if (v >= 100) return String(Math.round(v / 5) * 5);
+  if (v >= 10) return String(Math.round(v));
+  const unit = MEASURED.exec(rest);
+  const metric = unit && /^(g|mg|ml|cl)$/i.test(unit[1]);
+  if (metric) return String(Math.max(1, Math.round(v)));
+  const step = !unit && v >= 1 ? 2 : 4; // things you count: nearest ½; measures: nearest ¼
+  const r = Math.max(1 / step, Math.round(v * step) / step);
+  return fmtQty(r);
+}
 function ingredientHtml(line, factor) {
   const m = QTY.exec(line);
   if (!m) return esc(line);
-  const q = factor === 1 ? m[0] : fmtQty(toNum(m[1]) * factor) + (m[3] ? `–${fmtQty(toNum(m[3]) * factor)}` : '');
+  const rest = line.slice(m[0].length);
+  const q = factor === 1 ? m[0] : niceAmount(toNum(m[1]) * factor, rest) + (m[3] ? `–${niceAmount(toNum(m[3]) * factor, rest)}` : '');
   return `<b>${esc(q)}</b>${esc(line.slice(m[0].length))}`;
 }
 
@@ -470,10 +488,27 @@ function normTime(v) {
   return [d && `${d} d`, h && `${h} h`, m && `${m} min`].filter(Boolean).join(' ');
 }
 
-function normServings(v) {
+// Servings are always "<number> <what>": "Serves 4" -> "4 people", "für 4 Personen" -> "4 Personen", "Makes 24 cookies" -> "24 cookies".
+function parseServings(v) {
   const s = oneLine(v).replace(/\.$/, '');
-  const m = /^(?:serves|servings?|yield|makes|für|for|portionen|ergibt)?\s*:?\s*(\d+(?:\s*(?:-|–|to|bis)\s*\d+)?)\s*(servings?|portions?|portionen|personen|persons?|people|pers\.?|leute)?$/i.exec(s);
-  return m ? m[1].replace(/\s*(?:-|–|to|bis)\s*/, '–') : s;
+  const m = /(\d+(?:[.,]\d+)?)(?:\s*(?:-|–|to|bis)\s*(\d+(?:[.,]\d+)?))?\s*(.*)$/i.exec(s);
+  const n = m ? parseFloat(m[1].replace(',', '.')) : 0;
+  if (!n) return null;
+  let unit = m[3].trim();
+  if (!unit || /^(persons?|people)$/i.test(unit)) unit = 'people';
+  else if (/^(pers\.?|leute)$/i.test(unit)) unit = 'Personen';
+  return { n, max: m[2] ? parseFloat(m[2].replace(',', '.')) : 0, unit };
+}
+function servingsUnit(unit, n) {
+  const pairs = [['people', 'person'], ['Personen', 'Person'], ['Portionen', 'Portion'], ['servings', 'serving'], ['portions', 'portion']];
+  for (const [pl, sg] of pairs) if (unit.toLowerCase() === pl.toLowerCase() || unit.toLowerCase() === sg.toLowerCase()) return n === 1 ? sg : pl;
+  if (n === 1 && /^[a-z]+s$/i.test(unit) && !/ss$/i.test(unit) && /^[\x00-\x7f]+$/.test(unit)) return unit.replace(/ies$/, 'y').replace(/s$/, '');
+  return unit;
+}
+function normServings(v) {
+  const p = parseServings(v);
+  if (!p) return oneLine(v);
+  return `${p.n}${p.max ? `–${p.max}` : ''} ${servingsUnit(p.unit, p.max || p.n)}`;
 }
 
 function normTitle(v) {
@@ -741,9 +776,41 @@ function card(r) {
 }
 
 let detailFactor = 1;
+const servingsPick = new Map(); // recipe id -> chosen amount (this visit)
+
+// What the stepper counts: the recipe's own servings ("10 slices"), or batches if none are given.
+function servingsBase(r) {
+  const p = parseServings(r.servings);
+  return p ? { n: p.n, unit: p.unit, step: p.n >= 2 ? 1 : 0.5, batch: false } : { n: 1, unit: 'batch', step: 0.5, batch: true };
+}
+function pickedServings(r) {
+  const b = servingsBase(r);
+  return servingsPick.get(r.id) ?? b.n;
+}
+function syncFactor(r) {
+  detailFactor = pickedServings(r) / servingsBase(r).n;
+}
+function amountLabel(r, n = pickedServings(r)) {
+  const b = servingsBase(r);
+  const shown = fmtQty(n);
+  if (b.batch) return `${shown} ${n === 1 ? 'batch' : 'batches'}`;
+  return `${shown} ${servingsUnit(b.unit, n)}`;
+}
+function servingsStepper(r) {
+  const b = servingsBase(r);
+  const n = pickedServings(r);
+  return `<div class="servings" role="group" aria-label="Amount to make">
+      <button data-serv="-1" aria-label="Make less" ${n - b.step < b.step ? 'disabled' : ''}>−</button>
+      <span class="sv" aria-live="polite">${esc(amountLabel(r, n))}</span>
+      <button data-serv="1" aria-label="Make more">+</button>
+    </div>
+    ${n !== b.n ? `<button class="btn ghost small" data-servreset>Back to ${esc(amountLabel(r, b.n))}</button>` : ''}
+    ${b.batch ? '<small class="muted" style="flex-basis:100%">Add servings (e.g. "4 people" or "20 slices") under Edit to scale by people or pieces.</small>' : ''}`;
+}
 function renderDetail(r) {
+  syncFactor(r);
   const cover = coverOf(r);
-  const facts = [['Serves', r.servings], ['Prep', r.prepTime], ['Cook', r.cookTime], ['Total', r.totalTime]].filter(([, v]) => v);
+  const facts = [['Makes', (r.ingredients || []).some((l) => QTY.test(l)) ? '' : r.servings], ['Prep', r.prepTime], ['Cook', r.cookTime], ['Total', r.totalTime]].filter(([, v]) => v);
   const ing = r.ingredients || [], steps = r.instructions || [];
   const scalable = ing.some((l) => QTY.test(l));
   const done = new Set($$doneSteps());
@@ -770,7 +837,7 @@ function renderDetail(r) {
       <div class="cols">
         <section>
           <div class="sec-head"><h2>Ingredients</h2>
-            ${scalable ? `<div class="scaler" role="group" aria-label="Scale amounts">${[0.5, 1, 2, 3].map((f) => `<button data-scale="${f}" aria-pressed="${f === detailFactor}">${f === 0.5 ? '½' : f}×</button>`).join('')}</div>` : ''}
+            ${scalable ? servingsStepper(r) : ''}
           </div>
           ${ing.length ? `<ul class="ing">${ing.map((l) => l.startsWith('## ') ? `<li class="group">${esc(l.slice(3))}</li>` : `<li><label><input type="checkbox"><span>${ingredientHtml(l, detailFactor)}</span></label></li>`).join('')}</ul>` : '<p class="muted">None listed.</p>'}
         </section>
@@ -1015,7 +1082,7 @@ function renderEditor() {
         <label class="field"><span>Steps</span><textarea id="f-instructions" name="instructions" rows="9" placeholder="One step per line">${lines(r.instructions)}</textarea><small>One step per line.</small></label>
       </div>
       <div class="four">
-        <label class="field"><span>Serves</span><input id="f-servings" name="servings" value="${v(r.servings)}" placeholder="e.g. 4"></label>
+        <label class="field"><span>Makes</span><input id="f-servings" name="servings" value="${v(r.servings)}" placeholder="e.g. 4 people, 20 slices"></label>
         <label class="field"><span>Prep</span><input id="f-prep" name="prepTime" value="${v(r.prepTime)}" placeholder="e.g. 15 min"></label>
         <label class="field"><span>Cook</span><input id="f-cook" name="cookTime" value="${v(r.cookTime)}" placeholder="e.g. 40 min"></label>
         <label class="field"><span>Total</span><input id="f-total" name="totalTime" value="${v(r.totalTime)}" placeholder="e.g. 55 min"></label>
@@ -1106,7 +1173,7 @@ async function saveEditor() {
 const SHAPE = 'Reply with JSON only: {"title": string, "description": string (one or two sentences, or ""), "servings": string, "prepTime": string, "cookTime": string, "totalTime": string, ' +
   '"ingredients": string[] (one item per entry, always written as amount, unit, then ingredient, e.g. "200 g Mehl", "2 EL Zucker", "1½ cups flour", "2 eggs", "Salz"; keep the amounts and units from the recipe; put group headings such as "Für den Teig" or "For the sauce" as their own entry prefixed with "## "), ' +
   '"instructions": string[] (one step per entry, full sentences as written, without step numbers), "notes": string (tips, storage, variations, or ""), ' +
-  'times written like "15 min" or "1 h 30 min", servings as just the number of portions (e.g. "4") or the yield if it is not portions (e.g. "12 Stück"), ' +
+  'times written like "15 min" or "1 h 30 min", servings as a number plus what it counts, e.g. "4 people", "4 Portionen", "20 slices", "12 Stück", ' +
   '"tags": string[] (2-4 short lowercase tags in the recipe’s language, e.g. dish type or main ingredient)}. ' +
   'Keep the recipe’s original language. Never invent or change amounts. Use "" or [] for anything not given. ' +
   'If there is no recipe, return {"title": "", "ingredients": [], "instructions": []}.';
@@ -1433,7 +1500,7 @@ function renderCook() {
   const label = (n) => `Step ${n} · ${r.title}`;
   let body = '';
   if (pg.kind === 'ing') {
-    body = `<p class="cook-section">Get ready${detailFactor !== 1 ? ` · ${detailFactor === 0.5 ? '½' : detailFactor}× amounts` : ''}</p>
+    body = `<p class="cook-section">Get ready · for ${esc(amountLabel(r))}</p>
       <h2 class="cook-big">Ingredients</h2><ul class="ing">${ingList}</ul>`;
   } else if (pg.kind === 'step') {
     const ds = findDurations(pg.text);
@@ -1507,7 +1574,7 @@ document.addEventListener('click', async (e) => {
   if ((el = on('[data-panel]')) && el.tagName === 'BUTTON') { e.preventDefault(); return openAdd(el.dataset.panel); }
   if (on('[data-close]') || t.matches?.('[data-closebg]')) return closeSheet();
   if (on('[data-manual]')) return startDraft({ sourceType: 'manual' });
-  if ((el = on('[data-open]'))) { detailFactor = 1; return setView({ name: 'detail', id: el.dataset.open }); }
+  if ((el = on('[data-open]'))) { const r0 = state.recipes.find((x) => x.id === el.dataset.open); if (r0) syncFactor(r0); else detailFactor = 1; return setView({ name: 'detail', id: el.dataset.open }); }
   if (on('[data-back]')) return setView({ name: 'list' });
   if ((el = on('[data-f]'))) { if (el.dataset.f === 'all') { state.tag = ''; state.fav = false; } else state.fav = !state.fav; return render(); }
   if ((el = on('[data-tag]'))) { state.tag = state.tag === el.dataset.tag ? '' : el.dataset.tag; return render(); }
@@ -1540,7 +1607,13 @@ document.addEventListener('click', async (e) => {
   if (on('[data-fav]')) return patch(r.id, { favorite: !r.favorite });
   if ((el = on('[data-rate]'))) { const n = Number(el.dataset.rate); return patch(r.id, { rating: n === r.rating ? 0 : n }); }
   if (on('[data-edit]')) { state.view = { name: 'edit', id: r.id }; renderEditor(); return window.scrollTo(0, 0); }
-  if ((el = on('[data-scale]'))) { detailFactor = Number(el.dataset.scale); return renderDetail(r); }
+  if ((el = on('[data-serv]'))) {
+    const b = servingsBase(r);
+    servingsPick.set(r.id, Math.max(b.step, pickedServings(r) + Number(el.dataset.serv) * b.step));
+    syncFactor(r);
+    return renderDetail(r);
+  }
+  if (on('[data-servreset]')) { servingsPick.delete(r.id); syncFactor(r); return renderDetail(r); }
   if ((el = on('li.step'))) return el.classList.toggle('done');
   if ((el = on('[data-cover]'))) return patch(r.id, { cover: el.dataset.cover });
   if ((el = on('[data-del]'))) {
