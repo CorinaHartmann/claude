@@ -298,7 +298,8 @@ function parseText(input) {
 
 // ---------- Ingredient scaling ----------
 const FR = { '½': 1 / 2, '¼': 1 / 4, '¾': 3 / 4, '⅓': 1 / 3, '⅔': 2 / 3, '⅛': 1 / 8, '⅜': 3 / 8, '⅝': 5 / 8, '⅞': 7 / 8 };
-const NUM = '(?:\\d+(?:[.,]\\d+)?(?:\\s+\\d+\\/\\d+|\\s*[½¼¾⅓⅔⅛⅜⅝⅞])?|\\d+\\/\\d+|[½¼¾⅓⅔⅛⅜⅝⅞])';
+// Longest forms first: "1 1/2", then "1/2", then "1.5" / "1½", then "½".
+const NUM = '(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:[.,]\\d+)?(?:\\s*[½¼¾⅓⅔⅛⅜⅝⅞])?|[½¼¾⅓⅔⅛⅜⅝⅞])';
 const QTY = new RegExp(`^(${NUM})(\\s*(?:-|–|to)\\s*(${NUM}))?`);
 function toNum(s) {
   let t = 0;
@@ -321,6 +322,148 @@ function ingredientHtml(line, factor) {
   if (!m) return esc(line);
   const q = factor === 1 ? m[0] : fmtQty(toNum(m[1]) * factor) + (m[3] ? `–${fmtQty(toNum(m[3]) * factor)}` : '');
   return `<b>${esc(q)}</b>${esc(line.slice(m[0].length))}`;
+}
+
+// ---------- One house style for every recipe ----------
+// Every recipe passes through normalizeRecipe() on save and on display, so a
+// recipe looks the same whether it was pasted, read from a photo, typed or imported.
+const UNIT_MAP = [
+  [/^(tablespoons?|tbsps?|tbls?|tbs)$/i, 'tbsp'], [/^(teaspoons?|tsps?)$/i, 'tsp'],
+  [/^(esslöffel|el)$/i, 'EL'], [/^(teelöffel|tl)$/i, 'TL'],
+  [/^(grams?|gramm|grammes?|gr)$/i, 'g'], [/^(kilograms?|kilogramm|kilos?|kgs?)$/i, 'kg'],
+  [/^(milliliters?|millilitres?|milliliter|mls?)$/i, 'ml'], [/^(centiliters?|centilitres?|cls?)$/i, 'cl'],
+  [/^(liters?|litres?|liter|ltr|l)$/i, 'l'], [/^(ounces?|oz)$/i, 'oz'], [/^(pounds?|lbs?)$/i, 'lb'],
+  [/^(cups?|c)$/i, null], [/^(messerspitzen?|msp)$/i, 'Msp.'], [/^(päckchen|pck|pkg|packung)$/i, 'Pck.'],
+];
+const NICE = { 0.5: '½', 0.25: '¼', 0.75: '¾', 1.5: '1½', 2.5: '2½', 0.33: '⅓', 0.66: '⅔', 0.67: '⅔' };
+const oneLine = (v) => String(v ?? '').replace(/[ \t]+/g, ' ').replace(/\s+/g, ' ').trim();
+const capFirst = (t) => t.replace(/^(\P{L}*)(\p{Ll})/u, (m, a, b) => a + b.toUpperCase());
+
+function normQty(q) {
+  // Exact halves/quarters/thirds become ½ ¼ ⅓; whole numbers stay; anything else keeps its original spelling.
+  const n = toNum(q);
+  if (!n) return q.trim();
+  if (Number.isInteger(n)) return String(n);
+  const f = fmtQty(n);
+  return /[½¼¾⅓⅔⅛⅜⅝⅞]/.test(f) ? f : q.trim().replace(/\s+/g, ' ');
+}
+
+function normUnit(word, plural) {
+  const bare = word.replace(/\.$/, '');
+  for (const [re, out] of UNIT_MAP) {
+    if (re.test(bare)) return out === null ? (plural ? 'cups' : 'cup') : out;
+  }
+  return null;
+}
+
+const HEADING_WORDS = /^(für|for|zum|zur|to|topping|glaze|glasur|teig|dough|sauce|soße|sosse|dressing|filling|füllung|frosting|creme|marinade|streusel|belag|garnish|deko)\b/i;
+
+function normIngredient(raw) {
+  let s = oneLine(raw).replace(/^([-*•·▪◦‣–—]|\[\s?[x ]?\]|\(\s*\)|☐|☑|✓|✔)\s*/i, '');
+  if (!s) return '';
+  // Headings: "## X", "For the sauce:", "Für den Teig"
+  if (/^#+\s*/.test(s)) return `## ${capFirst(s.replace(/^#+\s*/, '').replace(/[:：]\s*$/, ''))}`;
+  if (!/\d|[½¼¾⅓⅔⅛]/.test(s) && s.length <= 45 && (/[:：]$/.test(s) || (HEADING_WORDS.test(s) && /^(für|for|zum|zur|to)\b/i.test(s)))) {
+    return `## ${capFirst(s.replace(/[:：]\s*$/, ''))}`;
+  }
+  s = s.replace(/^\d{1,2}[.)]\s+(?=\p{L})/u, ''); // list numbering, not an amount
+  s = s.replace(/\s*[.;]$/, '');
+  // "Flour: 200 g" / "Mehl, 200g" / "Eggs – 2" -> amount first
+  const tail = new RegExp(`^(\\D.*?)\\s*[:,–—-]\\s*(${NUM}(?:\\s*(?:-|–|to|bis)\\s*${NUM})?)\\s*([\\p{L}.]*)$`, 'iu');
+  const t = tail.exec(s);
+  if (t && (!t[3] || normUnit(t[3], true) || t[3].length <= 4)) s = `${t[2]}${t[3] ? ' ' + t[3] : ''} ${t[1]}`;
+  // Amount, range, unit
+  const m = new RegExp(`^(${NUM})(?:\\s*(?:-|–|to|bis)\\s*(${NUM}))?\\s*`, 'u').exec(s);
+  if (m) {
+    let rest = s.slice(m[0].length);
+    let qty = normQty(m[1]) + (m[2] ? `–${normQty(m[2])}` : '');
+    const w = /^([\p{L}]+\.?)(?=\s|$|,)/u.exec(rest);
+    if (w) {
+      const plural = toNum(m[2] || m[1]) > 1;
+      const unit = normUnit(w[1], plural);
+      if (unit) rest = unit + rest.slice(w[1].length);
+    }
+    s = rest ? `${qty} ${rest}` : qty;
+  }
+  return s.replace(/\s+,/g, ',').replace(/\s{2,}/g, ' ').trim();
+}
+
+function splitSteps(text) {
+  // "1. Mix. 2. Bake." written as one paragraph -> separate steps
+  return oneLine(text).split(/(?<=[.!?])\s+(?=(?:(?:step|schritt)\s*)?\d{1,2}\s*[.):]\s+\p{Lu})/iu);
+}
+
+function normStep(raw) {
+  let s = oneLine(raw);
+  if (!s) return '';
+  if (/^#+\s*/.test(s)) return `## ${capFirst(s.replace(/^#+\s*/, '').replace(/[:：]\s*$/, ''))}`;
+  s = s.replace(/^(?:(?:step|schritt)\s*\d+\s*[.):\-–]?|\d{1,2}\s*[.):])\s*/i, '');
+  s = s.replace(/^([-*•·▪◦‣–—])\s*/, '');
+  if (!s) return '';
+  s = capFirst(s);
+  if (/[:：]$/.test(s) && s.length <= 45 && !/\d/.test(s)) return `## ${s.replace(/[:：]$/, '')}`;
+  if (!/[.!?…)"”]$/.test(s)) s += '.';
+  return s;
+}
+
+function normTime(v) {
+  const s = oneLine(v);
+  if (!s) return '';
+  let mins = 0, found = false;
+  const iso = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/i.exec(s);
+  if (iso && /^P/i.test(s)) { mins = (+iso[1] || 0) * 1440 + (+iso[2] || 0) * 60 + (+iso[3] || 0); found = mins > 0; }
+  if (!found) {
+    const re = /(\d+(?:[.,]\d+)?|[½¼¾])\s*(d|days?|tage?n?|h|hrs?|hours?|std\.?|stunden?|m|mins?|minutes?|minuten|min\.?)(?![\p{L}])/giu;
+    let x;
+    while ((x = re.exec(s))) {
+      const n = FR[x[1]] ?? parseFloat(x[1].replace(',', '.'));
+      const u = x[2].toLowerCase();
+      if (/^(d|day|tag)/.test(u)) mins += n * 1440;
+      else if (/^(h|hr|hour|std|stund)/.test(u)) mins += n * 60;
+      else mins += n;
+      found = true;
+    }
+    if (!found && /^\d+$/.test(s)) { mins = +s; found = true; }
+  }
+  if (!found || !mins) return s;
+  mins = Math.round(mins);
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  return [d && `${d} d`, h && `${h} h`, m && `${m} min`].filter(Boolean).join(' ');
+}
+
+function normServings(v) {
+  const s = oneLine(v).replace(/\.$/, '');
+  const m = /^(?:serves|servings?|yield|makes|für|for|portionen|ergibt)?\s*:?\s*(\d+(?:\s*(?:-|–|to|bis)\s*\d+)?)\s*(servings?|portions?|portionen|personen|persons?|people|pers\.?|leute)?$/i.exec(s);
+  return m ? m[1].replace(/\s*(?:-|–|to|bis)\s*/, '–') : s;
+}
+
+function normTitle(v) {
+  let s = oneLine(v).replace(/^["'„“”‚‘’]+|["'“”‘’]+$/g, '');
+  s = s.replace(/\s+[|·–—-]\s+[^|·–—-]*(rezept|recipe|chefkoch|kochen|küche|kitchen|food|\.de|\.com|\.at|\.ch)[^|·–—-]*$/i, '');
+  s = s.replace(/\s+(rezept|recipe)$/i, '').replace(/^(rezept|recipe)\s*[:\-–]\s*/i, '');
+  const letters = s.replace(/[^\p{L}]/gu, '');
+  if (letters.length > 3 && letters === letters.toUpperCase()) s = s.toLowerCase();
+  return capFirst(s);
+}
+
+function normParagraph(v) {
+  return String(v ?? '').replace(/\r\n?/g, '\n').split('\n').map(oneLine).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function normalizeRecipe(r) {
+  const list = (a) => (Array.isArray(a) ? a : String(a || '').split('\n'));
+  const steps = list(r.instructions).flatMap((x) => (/^#/.test(String(x).trim()) ? [x] : splitSteps(x))).map(normStep).filter(Boolean);
+  return {
+    ...r,
+    title: normTitle(r.title) || 'Untitled recipe',
+    description: normParagraph(r.description),
+    ingredients: list(r.ingredients).map(normIngredient).filter(Boolean),
+    instructions: steps,
+    notes: normParagraph(r.notes),
+    servings: normServings(r.servings),
+    prepTime: normTime(r.prepTime), cookTime: normTime(r.cookTime), totalTime: normTime(r.totalTime),
+    tags: cleanTags(r.tags || []).slice(0, 6),
+  };
 }
 
 // ---------- Recipe helpers ----------
@@ -699,7 +842,8 @@ function openAdd(panel = '') {
 }
 
 function startDraft(draft, files = []) {
-  state.draft = { ...emptyRecipe(), ...draft };
+  state.draft = normalizeRecipe({ ...emptyRecipe(), ...draft });
+  if (!draft.title) state.draft.title = '';
   state.pending = files;
   closeSheet();
   state.view = { name: 'edit', id: null };
@@ -778,7 +922,7 @@ async function importBackup(file) {
       createdAt: String(old.createdAt || new Date().toISOString()),
       updatedAt: String(old.updatedAt || new Date().toISOString()),
     };
-    try { await recipesCol().doc(docId).set(body); added++; }
+    try { await recipesCol().doc(docId).set(normalizeRecipe(body)); added++; }
     catch (e) { toast(writeError(e), 6000); return; }
   }
   let msg = `Imported ${added} recipe${added === 1 ? '' : 's'}.`;
@@ -886,7 +1030,7 @@ function readForm() {
 async function saveEditor() {
   const btn = $('#save');
   const isNew = !state.view.id;
-  const body = readForm();
+  const body = normalizeRecipe(readForm());
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span> Saving…';
   try {
@@ -920,8 +1064,9 @@ async function saveEditor() {
 
 // ---------- Claude extraction (photos or pasted text) ----------
 const SHAPE = 'Reply with JSON only: {"title": string, "description": string (one or two sentences, or ""), "servings": string, "prepTime": string, "cookTime": string, "totalTime": string, ' +
-  '"ingredients": string[] (one item per entry, amounts and units exactly as written, e.g. "200 g Mehl"; put group headings such as "Für den Teig" or "For the sauce" as their own entry prefixed with "## "), ' +
+  '"ingredients": string[] (one item per entry, always written as amount, unit, then ingredient, e.g. "200 g Mehl", "2 EL Zucker", "1½ cups flour", "2 eggs", "Salz"; keep the amounts and units from the recipe; put group headings such as "Für den Teig" or "For the sauce" as their own entry prefixed with "## "), ' +
   '"instructions": string[] (one step per entry, full sentences as written, without step numbers), "notes": string (tips, storage, variations, or ""), ' +
+  'times written like "15 min" or "1 h 30 min", servings as just the number of portions (e.g. "4") or the yield if it is not portions (e.g. "12 Stück"), ' +
   '"tags": string[] (2-4 short lowercase tags in the recipe’s language, e.g. dish type or main ingredient)}. ' +
   'Keep the recipe’s original language. Never invent or change amounts. Use "" or [] for anything not given. ' +
   'If there is no recipe, return {"title": "", "ingredients": [], "instructions": []}.';
@@ -964,6 +1109,7 @@ function fillEditor(out, message) {
     prepTime: pick(cur.prepTime, out.prepTime), cookTime: pick(cur.cookTime, out.cookTime), totalTime: pick(cur.totalTime, out.totalTime),
     notes: pick(cur.notes, out.notes), tags: pick(cur.tags, out.tags),
   };
+  Object.assign(merged, normalizeRecipe(merged));
   if (isNew) {
     Object.assign(state.draft, merged, { filled: true });
     renderEditor();
@@ -1209,7 +1355,7 @@ document.addEventListener('paste', (e) => {
   db = await use('db').catch(() => null);
   if (!db) { state.loaded = true; state.offline = true; return render(); }
   recipesCol().onSnapshot((snap) => {
-    state.recipes = snap.docs.map((d) => ({ id: d.id, ...emptyRecipe(), ...d.data() }))
+    state.recipes = snap.docs.map((d) => normalizeRecipe({ id: d.id, ...emptyRecipe(), ...d.data() }))
       .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
     state.loaded = true;
     render();
