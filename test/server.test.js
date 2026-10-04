@@ -1,0 +1,147 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { Store } = require('../lib/store');
+const { createServer } = require('../server');
+
+async function startServer() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recipe-box-'));
+  const store = await new Store(dir).init();
+  const server = createServer(store);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (method, p, body, headers = {}) => {
+    const opts = { method, headers };
+    if (body !== undefined) {
+      opts.body = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
+      if (!headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+    }
+    const res = await fetch(base + p, opts);
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { /* not json */ }
+    return { status: res.status, json, text, headers: res.headers };
+  };
+  return { dir, store, server, base, call, stop: () => new Promise((r) => server.close(r)) };
+}
+
+test('create, search, update and delete a recipe', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+
+  const created = await s.call('POST', '/api/recipes', {
+    title: 'Tomato Soup', ingredients: 'tomatoes\n\nsalt', tags: 'Soup, quick, soup', evil: 'ignored',
+  });
+  assert.strictEqual(created.status, 201);
+  assert.deepStrictEqual(created.json.ingredients, ['tomatoes', 'salt']);
+  assert.deepStrictEqual(created.json.tags, ['soup', 'quick']);
+  assert.strictEqual(created.json.evil, undefined);
+  const id = created.json.id;
+
+  await s.call('POST', '/api/recipes', { title: 'Pancakes', tags: ['breakfast'] });
+
+  assert.strictEqual((await s.call('GET', '/api/recipes')).json.length, 2);
+  assert.deepStrictEqual((await s.call('GET', '/api/recipes?q=salt')).json.map((r) => r.title), ['Tomato Soup']);
+  assert.deepStrictEqual((await s.call('GET', '/api/recipes?tag=breakfast')).json.map((r) => r.title), ['Pancakes']);
+
+  const updated = await s.call('PUT', `/api/recipes/${id}`, { favorite: true, rating: 9 });
+  assert.strictEqual(updated.json.favorite, true);
+  assert.strictEqual(updated.json.rating, 5);
+  assert.strictEqual(updated.json.title, 'Tomato Soup');
+  assert.deepStrictEqual((await s.call('GET', '/api/recipes?favorite=1')).json.map((r) => r.id), [id]);
+
+  const tags = (await s.call('GET', '/api/tags')).json;
+  assert.deepStrictEqual(tags.map((x) => x.name).sort(), ['breakfast', 'quick', 'soup']);
+
+  // Data survives a restart.
+  const reloaded = await new Store(s.dir).init();
+  assert.strictEqual(reloaded.get(id).favorite, true);
+
+  assert.strictEqual((await s.call('DELETE', `/api/recipes/${id}`)).status, 204);
+  assert.strictEqual((await s.call('GET', `/api/recipes/${id}`)).status, 404);
+});
+
+test('upload, serve and delete attachments', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  const { json: r } = await s.call('POST', '/api/recipes', { title: 'Scanned card' });
+
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const up = await s.call('POST', `/api/recipes/${r.id}/files`, png, {
+    'Content-Type': 'image/png', 'X-Filename': encodeURIComponent('Omas Karte.png'),
+  });
+  assert.strictEqual(up.status, 201);
+  assert.strictEqual(up.json.name, 'Omas Karte.png');
+  assert.strictEqual(up.json.size, png.length);
+
+  const file = await fetch(`${s.base}/files/${up.json.id}`);
+  assert.strictEqual(file.headers.get('content-type'), 'image/png');
+  assert.match(file.headers.get('content-security-policy'), /sandbox/);
+  assert.deepStrictEqual(Buffer.from(await file.arrayBuffer()), png);
+
+  // HTML uploads are never served as HTML.
+  const html = await s.call('POST', `/api/recipes/${r.id}/files`, '<script>alert(1)</script>', {
+    'Content-Type': 'text/html', 'X-Filename': 'x.html',
+  });
+  const served = await fetch(`${s.base}/files/${html.json.id}`);
+  assert.strictEqual(served.headers.get('content-type'), 'application/octet-stream');
+  assert.match(served.headers.get('content-disposition'), /^attachment/);
+
+  // Range requests (video seeking).
+  const ranged = await fetch(`${s.base}/files/${up.json.id}`, { headers: { Range: 'bytes=2-4' } });
+  assert.strictEqual(ranged.status, 206);
+  assert.strictEqual(Buffer.from(await ranged.arrayBuffer()).length, 3);
+
+  assert.strictEqual((await s.call('DELETE', `/api/recipes/${r.id}/files/${up.json.id}`)).status, 204);
+  assert.strictEqual((await fetch(`${s.base}/files/${up.json.id}`)).status, 404);
+  assert.ok(!fs.existsSync(path.join(s.dir, 'files', up.json.id)));
+});
+
+test('backup export and restore round-trips recipes and files', async (t) => {
+  const a = await startServer();
+  t.after(a.stop);
+  const { json: r } = await a.call('POST', '/api/recipes', { title: 'Backup me', ingredients: ['1 egg'] });
+  await a.call('POST', `/api/recipes/${r.id}/files`, 'hello', { 'Content-Type': 'text/plain', 'X-Filename': 'note.txt' });
+  const backup = await a.call('GET', '/api/export');
+  assert.match(backup.headers.get('content-disposition'), /recipe-box-backup/);
+
+  const b = await startServer();
+  t.after(b.stop);
+  const restored = await b.call('POST', '/api/import/backup', backup.text);
+  assert.deepStrictEqual(restored.json, { imported: 1 });
+  const [copy] = (await b.call('GET', '/api/recipes')).json;
+  assert.strictEqual(copy.title, 'Backup me');
+  assert.strictEqual(copy.attachments.length, 1);
+  const file = await fetch(`${b.base}/files/${copy.attachments[0].id}`);
+  assert.strictEqual(await file.text(), 'hello');
+});
+
+test('text import endpoint and URL import validation', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  const text = await s.call('POST', '/api/import/text', { text: 'Toast\nIngredients\n1 slice bread\nSteps\nToast it.' });
+  assert.strictEqual(text.json.title, 'Toast');
+  assert.deepStrictEqual(text.json.instructions, ['Toast it.']);
+
+  const bad = await s.call('POST', '/api/import/url', { url: 'file:///etc/passwd' });
+  assert.strictEqual(bad.status, 400);
+  const local = await s.call('POST', '/api/import/url', { url: 'http://127.0.0.1:1/' });
+  assert.strictEqual(local.status, 400);
+});
+
+test('static files and client routes are served, traversal is not', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  for (const p of ['/', '/new', '/recipe/abc123', '/share?url=x']) {
+    const res = await s.call('GET', p);
+    assert.strictEqual(res.status, 200, p);
+    assert.match(res.text, /<title>Recipe Box<\/title>/);
+  }
+  assert.strictEqual((await s.call('GET', '/app.js')).headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.notStrictEqual((await s.call('GET', '/..%2fserver.js')).status, 200);
+  assert.strictEqual((await s.call('GET', '/files/../../server.js')).status, 404);
+});

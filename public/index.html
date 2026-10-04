@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Recipe Box</title>
+  <meta name="description" content="Save recipes in any format — links, videos, photos, PDFs, pasted text — in one place.">
+  <meta name="theme-color" content="#c2410c">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Recipe Box">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand" data-link>
+      <img src="/icon.svg" alt="" width="28" height="28">
+      <span>Recipe Box</span>
+    </a>
+    <div class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="search" type="search" placeholder="Search recipes, ingredients, tags…" autocomplete="off" aria-label="Search recipes">
+    </div>
+    <button id="add-btn" class="btn primary">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>Add recipe</span>
+    </button>
+    <button id="menu-btn" class="btn icon ghost" aria-label="Backup and settings" aria-haspopup="menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+    </button>
+    <div id="menu" class="menu" role="menu" hidden>
+      <a href="/api/export" role="menuitem" download>Download backup</a>
+      <button role="menuitem" id="import-backup-btn">Restore from backup…</button>
+      <input type="file" id="import-backup-input" accept=".json,application/json" hidden>
+    </div>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <!-- Add recipe dialog -->
+  <dialog id="add-dialog" aria-labelledby="add-title">
+    <form method="dialog" class="dialog-head">
+      <h2 id="add-title">Add a recipe</h2>
+      <button class="btn icon ghost" value="cancel" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </form>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="link" aria-selected="true">🔗 Link or video</button>
+      <button role="tab" data-tab="text" aria-selected="false">📋 Paste text</button>
+      <button role="tab" data-tab="files" aria-selected="false">📷 Photo / file</button>
+      <button role="tab" data-tab="manual" aria-selected="false">✍️ Type it in</button>
+    </div>
+
+    <section class="tab-panel" data-panel="link">
+      <p class="hint">Paste a link to any recipe website, or a YouTube, TikTok, Instagram or Vimeo video. Ingredients and steps are pulled out automatically when the page includes them.</p>
+      <form id="link-form" class="row">
+        <input id="link-input" type="url" inputmode="url" placeholder="https://…" required aria-label="Recipe link">
+        <button class="btn primary" type="submit">Import</button>
+      </form>
+    </section>
+
+    <section class="tab-panel" data-panel="text" hidden>
+      <p class="hint">Paste a recipe from anywhere — an email, a message, notes, a caption. It will be split into title, ingredients and steps for you to check.</p>
+      <form id="text-form">
+        <textarea id="text-input" rows="10" placeholder="Grandma's Lemon Cake&#10;&#10;Ingredients&#10;- 200 g flour&#10;- 2 eggs&#10;&#10;Instructions&#10;1. Preheat the oven…" required aria-label="Recipe text"></textarea>
+        <div class="row end"><button class="btn primary" type="submit">Continue</button></div>
+      </form>
+    </section>
+
+    <section class="tab-panel" data-panel="files" hidden>
+      <p class="hint">Photos of cookbook pages or handwritten cards, screenshots, PDFs, Word docs, videos, voice memos — any file works. Add several to keep them together as one recipe.</p>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="file-input" multiple hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <strong>Drop files here or click to choose</strong>
+        <span>Images, PDFs, documents, video, audio…</span>
+      </label>
+      <div class="row center">
+        <label class="btn">
+          <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+          📸 Take a photo
+        </label>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="manual" hidden>
+      <p class="hint">Start with a blank recipe and fill in whatever you like.</p>
+      <div class="row end"><button class="btn primary" id="manual-btn">Start writing</button></div>
+    </section>
+
+    <div id="add-status" class="status" role="status" aria-live="polite"></div>
+  </dialog>
+
+  <div id="drop-overlay" hidden><div>Drop to add to your Recipe Box</div></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

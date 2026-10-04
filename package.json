@@ -1,0 +1,15 @@
+{
+  "name": "recipe-box",
+  "version": "1.0.0",
+  "description": "One central place to save recipes in any format: links, videos, photos, PDFs, pasted text or typed by hand.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
