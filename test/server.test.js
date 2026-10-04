@@ -145,3 +145,36 @@ test('static files and client routes are served, traversal is not', async (t) =>
   assert.notStrictEqual((await s.call('GET', '/..%2fserver.js')).status, 200);
   assert.strictEqual((await s.call('GET', '/files/../../server.js')).status, 404);
 });
+
+test('every saved recipe gets the same formatting', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  const { json } = await s.call('POST', '/api/recipes', {
+    title: 'BROWNIES | Chefkoch.de',
+    ingredients: ['- 200g Mehl', 'Zucker: 100 g', 'Für den Teig:'],
+    instructions: ['1. ofen vorheizen', 'Schritt 2: 25 Min. backen'],
+    servings: 'für 4 Personen', cookTime: '90 Min.',
+  });
+  assert.strictEqual(json.title, 'Brownies');
+  assert.deepStrictEqual(json.ingredients, ['200 g Mehl', '100 g Zucker', '## Für den Teig']);
+  assert.deepStrictEqual(json.instructions, ['Ofen vorheizen.', '25 Min. backen.']);
+  assert.strictEqual(json.servings, '4 Personen');
+  assert.strictEqual(json.cookTime, '1 h 30 min');
+
+  const draft = await s.call('POST', '/api/import/text', { text: 'Soup\nServes 2\nIngredients\n1 l stock\nMethod\n1. simmer for 20 minutes' });
+  assert.strictEqual(draft.json.servings, '2 people');
+  assert.deepStrictEqual(draft.json.instructions, ['Simmer for 20 minutes.']);
+});
+
+test('reading with Claude is reported as off without an API key', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  const saved = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  t.after(() => { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; });
+  if (!process.env.ANTHROPIC_AUTH_TOKEN) {
+    assert.deepStrictEqual((await s.call('GET', '/api/config')).json, { ai: false });
+    const res = await s.call('POST', '/api/ai/extract', { text: 'Toast' });
+    assert.strictEqual(res.status, 503);
+  }
+});

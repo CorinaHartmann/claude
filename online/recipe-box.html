@@ -1323,7 +1323,7 @@ async function importPastedText(text, btn) {
 // ---------- Timers ----------
 // Durations in step text: "15 minutes", "20–25 Min.", "1 Std. 30 Min.", "eine halbe Stunde".
 const DNUM = '(\\d+(?:[.,]\\d+)?|½|¼|¾)';
-const DUNIT = '(stunden|stunde|std\\.?|hours?|hrs?|h|minuten|minutes?|mins?|min\\.?|sekunden|sek\\.?|seconds?|secs?)';
+const DUNIT = '(stunden|stunde|std\\.?|hours?|hrs?|h|minuten|minutes?|min\\.|mins?|sekunden|sek\\.?|seconds?|secs?)';
 const DUR_RE = new RegExp(`${DNUM}(?:\\s*(?:-|–|bis|to|or|oder)\\s*${DNUM})?\\s*${DUNIT}(?![\\p{L}])`, 'giu');
 const HALF_HOUR = /(half an hour|(?:eine[rn]?\s+)?halben?\s+stunde)/giu;
 const unitSecs = (u) => (/^(st|h)/i.test(u) ? 3600 : /^(se|sek)/i.test(u) ? 1 : 60);

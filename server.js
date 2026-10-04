@@ -1,20 +1,31 @@
 'use strict';
 
-// Recipe Box server: a JSON API plus the static web app, no dependencies.
-//   PORT      port to listen on            (default 3000)
-//   HOST      interface to bind            (default 0.0.0.0 so phones on your Wi-Fi can reach it)
-//   DATA_DIR  where recipes + files live   (default ./data)
+// Recipe Box server: a JSON API plus the static web app.
+//   PORT               port to listen on            (default 3000)
+//   HOST               interface to bind            (default 0.0.0.0 so phones on your Wi-Fi can reach it)
+//   DATA_DIR           where recipes + files live   (default ./data)
+//   ANTHROPIC_API_KEY  optional: lets Claude read recipes from photos and pasted text
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Store } = require('./lib/store');
 const importer = require('./lib/importer');
+const ai = require('./lib/ai');
+const { normalizeRecipe } = require('./public/recipe-kit');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_UPLOAD = 200 * 1024 * 1024;
 const MAX_JSON = 2 * 1024 * 1024;
 const MAX_BACKUP = 1024 * 1024 * 1024;
+const MAX_AI = 40 * 1024 * 1024;
+
+// Drafts from importers get the same formatting as saved recipes.
+function draft(d) {
+  const out = normalizeRecipe(d);
+  if (!d.title) out.title = '';
+  return out;
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -181,15 +192,22 @@ async function handleApi(req, res, store, url) {
 
   if (parts[0] === 'tags' && method === 'GET') return send(res, 200, store.tags());
 
+  if (parts[0] === 'config' && method === 'GET') return send(res, 200, { ai: ai.isEnabled() });
+
+  if (parts[0] === 'ai' && parts[1] === 'extract' && method === 'POST') {
+    const body = await readJson(req, MAX_AI);
+    return send(res, 200, draft({ ...(await ai.extractRecipe(body)), source: { type: body.images ? 'file' : 'text', url: '' } }));
+  }
+
   if (parts[0] === 'import' && method === 'POST') {
     if (parts[1] === 'url') {
       const { url: target } = await readJson(req);
       if (!target) throw new HttpError(400, 'Missing url');
-      return send(res, 200, await importer.importUrl(String(target)));
+      return send(res, 200, draft(await importer.importUrl(String(target))));
     }
     if (parts[1] === 'text') {
       const { text } = await readJson(req);
-      return send(res, 200, importer.parseText(text));
+      return send(res, 200, draft(importer.parseText(text)));
     }
     if (parts[1] === 'backup') {
       const count = await store.importAll(await readJson(req, MAX_BACKUP));

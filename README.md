@@ -14,21 +14,26 @@ One central place for all your recipes, however you found them.
 
 Then you can:
 
+- **cook step by step**: ▶ Start cooking shows one step per screen in large text, with Next/Back or swipe, and keeps the screen on
+- **use timers**: times in steps ("15 minutes", "20–25 Min.", "1 Std. 30 Min.") become timer buttons; several can run at once, and they ring when done
+- **choose how much to make**: a − / + stepper shows the real amount ("12 slices", "4 people") and every ingredient adjusts, rounded the way you'd measure
 - **search** across titles, ingredients, steps, notes, tags and file names (press `/` to jump to search)
 - **filter** by tag or favorites, and **rate** recipes from 1 to 5 stars
-- **scale** ingredients to ½×, 2× or 3×
 - **tick off** ingredients and steps while you cook
 - **print** a clean copy of a recipe
 - **attach** more photos or files to any recipe and pick one as the cover
 - **back up** everything (recipes *and* files) to one file, and restore it
 
+Every recipe is formatted the same way however it was added: amounts first ("200 g Mehl"), consistent units and fractions ("1½ tbsp"), steps as numbered sentences, times as "1 h 30 min", servings as "4 people" or "20 slices".
+
 Shortcuts: drag files or links anywhere onto the page, or paste (Ctrl/⌘+V) an image, a link or recipe text.
 
 ## Running it
 
-You need [Node.js](https://nodejs.org) 18 or newer. Nothing else gets installed.
+You need [Node.js](https://nodejs.org) 18 or newer.
 
 ```sh
+npm install
 npm start
 ```
 
@@ -41,6 +46,20 @@ Your recipes are saved in `data/`: `recipes.json` plus a `files/` folder. Copy t
 | `PORT`     | `3000`    | Port to listen on                          |
 | `HOST`     | `0.0.0.0` | Interface to bind. Use `127.0.0.1` to keep it to this computer only |
 | `DATA_DIR` | `./data`  | Where recipes and files are stored         |
+| `ANTHROPIC_API_KEY` | (none) | Optional. Lets Claude read recipes from photos and messy pasted text |
+
+### Letting Claude read recipes (optional)
+
+Without a key, pasted text is split into ingredients and steps by simple rules. With an [Anthropic API key](https://console.anthropic.com/), Claude reads pasted page text, captions and photos of recipe cards or cookbook pages instead, which is much more reliable. Each read is a paid API call on your Anthropic account.
+
+```sh
+# macOS / Linux
+ANTHROPIC_API_KEY=sk-ant-... npm start
+# Windows (PowerShell)
+$env:ANTHROPIC_API_KEY="sk-ant-..."; npm start
+```
+
+When it's on, the editor shows **✨ Fill in with Claude** and **✨ Read from photos**.
 
 ### Using it on your phone
 
@@ -62,7 +81,10 @@ npm test
 server.js          HTTP server: JSON API, file uploads, static files
 lib/store.js       Recipe storage (JSON file plus attachment files, atomic writes)
 lib/importer.js    Website/video link import (schema.org JSON-LD, microdata, Open Graph) and pasted-text parsing
+lib/ai.js          Optional: Claude reads recipes from text or photos (needs ANTHROPIC_API_KEY)
+public/recipe-kit.js  Shared by server and browser: formatting, servings and amounts, timer durations
 public/            The web app (plain HTML/CSS/JS, installable as a PWA, works offline for recipes you've opened)
+online/            The claude.ai version of the app (one HTML file; runs only on claude.ai)
 test/              Tests (node:test)
 ```
 
@@ -81,5 +103,7 @@ test/              Tests (node:test)
 | GET    | `/api/tags`                        | Tags with counts                                 |
 | POST   | `/api/import/url`                  | `{ "url": "…" }` → draft recipe (not saved)      |
 | POST   | `/api/import/text`                 | `{ "text": "…" }` → draft recipe (not saved)     |
+| GET    | `/api/config`                      | `{ "ai": true/false }`: whether Claude reading is on |
+| POST   | `/api/ai/extract`                  | `{ "text": "…" }` or `{ "images": [{ "type", "data" }] }` → draft recipe (not saved) |
 | GET    | `/api/export`                      | Full backup with files embedded                  |
 | POST   | `/api/import/backup`               | A backup file; adds its recipes as new copies    |
