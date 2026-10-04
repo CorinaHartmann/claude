@@ -1,8 +1,8 @@
 // Offline support: the app shell is cached, recipes you've opened stay
 // readable without a connection, and saved files are cached after first view.
-const SHELL = 'recipe-box-shell-v2';
+const SHELL = 'recipe-box-shell-v3';
 const DATA = 'recipe-box-data-v1';
-const SHELL_FILES = ['/', '/index.html', '/app.js', '/recipe-kit.js', '/styles.css', '/icon.svg', '/manifest.webmanifest'];
+const SHELL_FILES = ['/', '/index.html', '/app.js', '/i18n.js', '/recipe-kit.js', '/styles.css', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));

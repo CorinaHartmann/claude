@@ -136,7 +136,7 @@ test('text import endpoint and URL import validation', async (t) => {
 test('static files and client routes are served, traversal is not', async (t) => {
   const s = await startServer();
   t.after(s.stop);
-  for (const p of ['/', '/new', '/recipe/abc123', '/share?url=x']) {
+  for (const p of ['/', '/new', '/settings', '/recipe/abc123', '/share?url=x']) {
     const res = await s.call('GET', p);
     assert.strictEqual(res.status, 200, p);
     assert.match(res.text, /<title>Recipe Box<\/title>/);
@@ -177,4 +177,79 @@ test('reading with Claude is reported as off without an API key', async (t) => {
     const res = await s.call('POST', '/api/ai/extract', { text: 'Toast' });
     assert.strictEqual(res.status, 503);
   }
+});
+
+test('language setting is saved', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  assert.deepStrictEqual((await s.call('GET', '/api/settings')).json, { language: null, autoTranslate: true });
+  assert.strictEqual((await s.call('PUT', '/api/settings', { language: 'fr' })).json.language, 'fr');
+  assert.strictEqual((await s.call('PUT', '/api/settings', { language: 'xx' })).json.language, 'fr');
+  const reloaded = await new Store(s.dir).init();
+  assert.strictEqual(reloaded.getSettings().language, 'fr');
+});
+
+test('translating keeps the original and can restore it', async (t) => {
+  const ai = require('../lib/ai');
+  const real = ai.translateRecipe;
+  let calls = 0;
+  ai.translateRecipe = async (recipe, to) => {
+    calls++;
+    assert.strictEqual(to, 'en');
+    return {
+      sourceLanguage: 'de', title: 'Sugar-free brownies', description: '', servings: '12 pieces', prepTime: '', cookTime: '25 min', totalTime: '',
+      ingredients: ['200 g dates', '2 eggs'], instructions: ['Bake for 25 minutes.'], notes: '', tags: ['baking'],
+    };
+  };
+  t.after(() => { ai.translateRecipe = real; });
+  const s = await startServer();
+  t.after(s.stop);
+
+  const { json: r } = await s.call('POST', '/api/recipes', {
+    title: 'Zuckerfreie Brownies', ingredients: ['200 g Datteln', '2 Eier'], instructions: ['25 Minuten backen.'], servings: '12 Stück', tags: ['backen'],
+  });
+  const tr = await s.call('POST', `/api/recipes/${r.id}/translate`, { to: 'en' });
+  assert.strictEqual(tr.status, 200);
+  assert.strictEqual(tr.json.title, 'Sugar-free brownies');
+  assert.deepStrictEqual(tr.json.ingredients, ['200 g dates', '2 eggs']);
+  assert.strictEqual(tr.json.lang, 'en');
+  assert.strictEqual(tr.json.original.lang, 'de');
+  assert.strictEqual(tr.json.original.title, 'Zuckerfreie Brownies');
+
+  // Already English: no second call to Claude.
+  await s.call('POST', `/api/recipes/${r.id}/translate`, { to: 'en' });
+  assert.strictEqual(calls, 1);
+
+  // Editing keeps the original copy.
+  const edited = await s.call('PUT', `/api/recipes/${r.id}`, { favorite: true });
+  assert.strictEqual(edited.json.original.title, 'Zuckerfreie Brownies');
+
+  // The original survives a backup round trip.
+  const backup = await s.call('GET', '/api/export');
+  const s2 = await startServer();
+  t.after(s2.stop);
+  await s2.call('POST', '/api/import/backup', backup.text);
+  const [copy] = (await s2.call('GET', '/api/recipes')).json;
+  assert.strictEqual(copy.original.title, 'Zuckerfreie Brownies');
+
+  const back = await s.call('POST', `/api/recipes/${r.id}/original`);
+  assert.strictEqual(back.json.title, 'Zuckerfreie Brownies');
+  assert.strictEqual(back.json.lang, 'de');
+  assert.strictEqual(back.json.original, undefined);
+  assert.strictEqual(back.json.favorite, true);
+});
+
+test('translation without Claude explains what is missing', async (t) => {
+  const s = await startServer();
+  t.after(s.stop);
+  const saved = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  t.after(() => { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; });
+  if (process.env.ANTHROPIC_AUTH_TOKEN) return;
+  const { json: r } = await s.call('POST', '/api/recipes', { title: 'Zuckerfreie Brownies', ingredients: ['200 g Datteln', '2 Eier'], instructions: ['Den Ofen vorheizen und 25 Minuten backen.'] });
+  const res = await s.call('POST', `/api/recipes/${r.id}/translate`, { to: 'en' });
+  assert.strictEqual(res.status, 503);
+  // Same language needs no Claude at all.
+  const same = await s.call('POST', `/api/recipes/${r.id}/translate`, { to: 'de' });
+  assert.strictEqual(same.json.lang, 'de');
 });

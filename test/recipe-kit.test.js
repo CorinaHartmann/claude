@@ -42,3 +42,9 @@ test('a duration keeps its abbreviation dot', () => {
   const [d] = K.findDurations('25 Min. backen.');
   assert.strictEqual('25 Min. backen.'.slice(d.start, d.end), '25 Min.');
 });
+
+test('detects the language of a recipe', () => {
+  assert.strictEqual(K.detectLang({ title: 'Brownies', ingredients: ['200 g Mehl', '2 Eier'], instructions: ['Den Ofen vorheizen und 25 Minuten backen.'] }), 'de');
+  assert.strictEqual(K.detectLang({ title: 'Crêpes', ingredients: ['250 g de farine', '4 œufs'], instructions: ['Mélanger la farine et les œufs.'] }), 'fr');
+  assert.strictEqual(K.detectLang({ title: 'IMG 2041', ingredients: [], instructions: [] }), null);
+});

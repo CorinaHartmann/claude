@@ -24,6 +24,19 @@ Then you can:
 - **attach** more photos or files to any recipe and pick one as the cover
 - **back up** everything (recipes *and* files) to one file, and restore it
 
+### Languages
+
+The app speaks German, English, French, Italian, Spanish and Dutch. Choose the language under **⋮ → Language & settings**; the first time, the app picks your browser's language.
+
+With Claude switched on (see below), recipes can be translated into that language too:
+
+- **Translate all**: one button on the settings page translates every recipe that's in another language, with a progress bar.
+- **Translate new recipes automatically**: on by default; a recipe is translated when you save it.
+- **Translate one**: a recipe in another language shows a "Translate into …" button.
+- **Nothing is lost**: the original text is kept. On a translated recipe, **Show original** switches between the two, and **Restore original** goes back for good.
+
+Amounts and numbers are never changed; units are written the usual way for the language (EL ↔ tbsp, TL ↔ tsp). The language of a recipe is recognised without Claude, so recipes already in your language are skipped and cost nothing.
+
 Every recipe is formatted the same way however it was added: amounts first ("200 g Mehl"), consistent units and fractions ("1½ tbsp"), steps as numbered sentences, times as "1 h 30 min", servings as "4 people" or "20 slices".
 
 Shortcuts: drag files or links anywhere onto the page, or paste (Ctrl/⌘+V) an image, a link or recipe text.
@@ -46,7 +59,7 @@ Your recipes are saved in `data/`: `recipes.json` plus a `files/` folder. Copy t
 | `PORT`     | `3000`    | Port to listen on                          |
 | `HOST`     | `0.0.0.0` | Interface to bind. Use `127.0.0.1` to keep it to this computer only |
 | `DATA_DIR` | `./data`  | Where recipes and files are stored         |
-| `ANTHROPIC_API_KEY` | (none) | Optional. Lets Claude read recipes from photos and messy pasted text |
+| `ANTHROPIC_API_KEY` | (none) | Optional. Lets Claude read recipes from photos and messy pasted text, and translate recipes |
 
 ### Letting Claude read recipes (optional)
 
@@ -59,7 +72,7 @@ ANTHROPIC_API_KEY=sk-ant-... npm start
 $env:ANTHROPIC_API_KEY="sk-ant-..."; npm start
 ```
 
-When it's on, the editor shows **✨ Fill in with Claude** and **✨ Read from photos**.
+When it's on, the editor shows **✨ Fill in with Claude** and **✨ Read from photos**, and recipes can be translated (see Languages above).
 
 ### Using it on your phone
 
@@ -82,7 +95,8 @@ server.js          HTTP server: JSON API, file uploads, static files
 lib/store.js       Recipe storage (JSON file plus attachment files, atomic writes)
 lib/importer.js    Website/video link import (schema.org JSON-LD, microdata, Open Graph) and pasted-text parsing
 lib/ai.js          Optional: Claude reads recipes from text or photos (needs ANTHROPIC_API_KEY)
-public/recipe-kit.js  Shared by server and browser: formatting, servings and amounts, timer durations
+public/recipe-kit.js  Shared by server and browser: formatting, servings and amounts, timer durations, language detection
+public/i18n.js     App texts in German, English, French, Italian, Spanish and Dutch
 public/            The web app (plain HTML/CSS/JS, installable as a PWA, works offline for recipes you've opened)
 online/            The claude.ai version of the app (one HTML file; runs only on claude.ai)
 test/              Tests (node:test)
@@ -104,6 +118,9 @@ test/              Tests (node:test)
 | POST   | `/api/import/url`                  | `{ "url": "…" }` → draft recipe (not saved)      |
 | POST   | `/api/import/text`                 | `{ "text": "…" }` → draft recipe (not saved)     |
 | GET    | `/api/config`                      | `{ "ai": true/false }`: whether Claude reading is on |
+| GET/PUT | `/api/settings`                   | `{ "language": "de", "autoTranslate": true }`    |
+| POST   | `/api/recipes/:id/translate`       | `{ "to": "en" }`: translate; the original is kept in `original` |
+| POST   | `/api/recipes/:id/original`        | Put the original text back                       |
 | POST   | `/api/ai/extract`                  | `{ "text": "…" }` or `{ "images": [{ "type", "data" }] }` → draft recipe (not saved) |
 | GET    | `/api/export`                      | Full backup with files embedded                  |
 | POST   | `/api/import/backup`               | A backup file; adds its recipes as new copies    |

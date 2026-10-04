@@ -1,5 +1,7 @@
 // Recipe Box front end. Plain JS, no build step.
 
+import { t, getLang, setLang, LANG_CODES, applyStaticTexts, languageName } from './i18n.js';
+
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const view = $('#view');
@@ -23,11 +25,11 @@ async function request(method, path, body, headers = {}) {
   try {
     res = await fetch(path, opts);
   } catch {
-    throw new Error('Could not reach the Recipe Box server. Is it running?');
+    throw new Error(t('Could not reach the Recipe Box server. Is it running?'));
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw new Error(data.error || t('Request failed ({status})', { status: res.status }));
   return data;
 }
 
@@ -42,6 +44,10 @@ const api = {
   importText: (text) => request('POST', '/api/import/text', { text }),
   config: () => request('GET', '/api/config'),
   aiExtract: (body) => request('POST', '/api/ai/extract', body),
+  settings: () => request('GET', '/api/settings'),
+  saveSettings: (s) => request('PUT', '/api/settings', s),
+  translate: (id, to) => request('POST', `/api/recipes/${id}/translate`, { to }),
+  restoreOriginal: (id) => request('POST', `/api/recipes/${id}/original`),
   importBackup: (text) => request('POST', '/api/import/backup', text, { 'Content-Type': 'application/json' }),
   upload: (id, file) => request('POST', `/api/recipes/${id}/files`, file, {
     'Content-Type': file.type || 'application/octet-stream',
@@ -60,6 +66,7 @@ const state = {
   pendingFiles: [], // files to upload once the draft is saved
   ai: false, // Claude reading is available (server has an API key)
   cook: null, // recipe open in cooking mode
+  settings: { language: null, autoTranslate: true },
 };
 
 // ---------- Helpers ----------
@@ -110,13 +117,13 @@ function hostOf(url) {
 // What kind of thing is this recipe, mostly? Used for badges and placeholders.
 function kindOf(r) {
   const files = r.attachments || [];
-  if (r.source?.type === 'video' || r.videoUrl) return { icon: '🎬', label: 'Video' };
-  if (r.source?.type === 'url') return { icon: '🔗', label: 'Web' };
-  if (files.some((a) => a.type === 'application/pdf')) return { icon: '📄', label: 'PDF' };
-  if (files.some(isImage)) return { icon: '📷', label: 'Photo' };
-  if (files.length) return { icon: fileIcon(files[0]), label: 'File' };
-  if (r.source?.type === 'text') return { icon: '📋', label: 'Text' };
-  return { icon: '✍️', label: 'Written' };
+  if (r.source?.type === 'video' || r.videoUrl) return { icon: '🎬', label: t('Video') };
+  if (r.source?.type === 'url') return { icon: '🔗', label: t('Web') };
+  if (files.some((a) => a.type === 'application/pdf')) return { icon: '📄', label: t('PDF') };
+  if (files.some(isImage)) return { icon: '📷', label: t('Photo') };
+  if (files.length) return { icon: fileIcon(files[0]), label: t('File') };
+  if (r.source?.type === 'text') return { icon: '📋', label: t('Text') };
+  return { icon: '✍️', label: t('Written') };
 }
 
 function coverOf(r) {
@@ -183,7 +190,7 @@ function stepWithTimers(text, label) {
   let html = '', at = 0;
   for (const d of Kit.findDurations(text)) {
     html += esc(text.slice(at, d.start));
-    html += `<button class="tchip" data-tstart="${d.secs}" data-tlabel="${esc(label)}" title="Start a ${esc(Kit.fmtDur(d.secs))} timer">${esc(text.slice(d.start, d.end))} ⏱</button>`;
+    html += `<button class="tchip" data-tstart="${d.secs}" data-tlabel="${esc(label)}" title="${esc(t('Start a {time} timer', { time: Kit.fmtDur(d.secs) }))}">${esc(text.slice(d.start, d.end))} ⏱</button>`;
     at = d.end;
   }
   return html + esc(text.slice(at));
@@ -199,19 +206,19 @@ const pickedServings = (r) => servingsPick.get(r.id) ?? servingsBase(r).n;
 const servingsFactor = (r) => pickedServings(r) / servingsBase(r).n;
 function amountLabel(r, n = pickedServings(r)) {
   const b = servingsBase(r);
-  if (b.batch) return `${Kit.fmtQty(n)} ${n === 1 ? 'batch' : 'batches'}`;
+  if (b.batch) return `${Kit.fmtQty(n)} ${n === 1 ? t('batch') : t('batches')}`;
   return `${Kit.fmtQty(n)} ${Kit.servingsUnit(b.unit, n)}`;
 }
 function servingsStepper(r) {
   const b = servingsBase(r);
   const n = pickedServings(r);
-  return `<div class="servings" role="group" aria-label="Amount to make">
-      <button data-serv="-1" aria-label="Make less" ${n - b.step < b.step ? 'disabled' : ''}>−</button>
+  return `<div class="servings" role="group" aria-label="${t('Amount to make')}">
+      <button data-serv="-1" aria-label="${t('Make less')}" ${n - b.step < b.step ? 'disabled' : ''}>−</button>
       <span class="sv" aria-live="polite">${esc(amountLabel(r, n))}</span>
-      <button data-serv="1" aria-label="Make more">+</button>
+      <button data-serv="1" aria-label="${t('Make more')}">+</button>
     </div>
-    ${n !== b.n ? `<button class="btn ghost small" data-servreset>Back to ${esc(amountLabel(r, b.n))}</button>` : ''}
-    ${b.batch ? '<small class="muted" style="flex-basis:100%">Add servings (e.g. "4 people" or "20 slices") under Edit to scale by people or pieces.</small>' : ''}`;
+    ${n !== b.n ? `<button class="btn ghost small" data-servreset>${esc(t('Back to {amount}', { amount: amountLabel(r, b.n) }))}</button>` : ''}
+    ${b.batch ? `<small class="muted" style="flex-basis:100%">${t('Add servings (e.g. "4 people" or "20 slices") under Edit to scale by people or pieces.')}</small>` : ''}`;
 }
 
 // ---------- Router ----------
@@ -231,7 +238,12 @@ async function render() {
   try {
     if (path === '/share') return handleShare();
     if (path === '/new') return renderEditor(null);
+    if (path === '/settings') return renderSettings();
     if ((m = /^\/recipe\/([a-f0-9]+)\/edit$/.exec(path))) return renderEditor(Kit.normalizeRecipe(await api.get(m[1])));
+    if ((m = /^\/recipe\/([a-f0-9]+)$/.exec(path))) {
+      if (state.lastRecipe !== m[1]) state.showOriginal = false;
+      state.lastRecipe = m[1];
+    }
     if ((m = /^\/recipe\/([a-f0-9]+)$/.exec(path))) return renderRecipe(Kit.normalizeRecipe(await api.get(m[1])));
     return renderLibrary();
   } catch (err) {
@@ -239,7 +251,7 @@ async function render() {
       <div class="empty">
         <div class="big">🥄</div>
         <h2>${esc(err.message)}</h2>
-        <p><a href="/" data-link>Back to all recipes</a></p>
+        <p><a href="/" data-link>${t('Back to all recipes')}</a></p>
       </div>`;
   }
 }
@@ -264,9 +276,9 @@ async function renderLibrary() {
 
   const filtering = state.q || state.tag || state.favorite;
   const chips = `
-    <div class="filters" role="toolbar" aria-label="Filter recipes">
-      <button class="chip" data-filter="all" aria-pressed="${!state.tag && !state.favorite}">All</button>
-      <button class="chip" data-filter="fav" aria-pressed="${state.favorite}">★ Favorites</button>
+    <div class="filters" role="toolbar" aria-label="${t('Filter recipes')}">
+      <button class="chip" data-filter="all" aria-pressed="${!state.tag && !state.favorite}">${t('All')}</button>
+      <button class="chip" data-filter="fav" aria-pressed="${state.favorite}">★ ${t('Favorites')}</button>
       ${tags.map((t) => `<button class="chip" data-tag="${esc(t.name)}" aria-pressed="${state.tag === t.name}">${esc(t.name)}<span class="count">${t.count}</span></button>`).join('')}
     </div>`;
 
@@ -274,25 +286,25 @@ async function renderLibrary() {
     view.innerHTML = `
       <div class="empty">
         <div class="big">📖</div>
-        <h2>Your recipe box is empty</h2>
-        <p>Save recipes from anywhere, in any format — they all end up here, searchable and in one place.</p>
+        <h2>${t('Your recipe box is empty')}</h2>
+        <p>${t('Save recipes from anywhere, in any format. They all end up here, searchable and in one place.')}</p>
         <div class="formats">
-          <span class="badge kind">🔗 Websites</span>
+          <span class="badge kind">🔗 ${t('Websites')}</span>
           <span class="badge kind">🎬 YouTube · TikTok · Instagram</span>
-          <span class="badge kind">📷 Photos & scans</span>
-          <span class="badge kind">📄 PDFs & documents</span>
-          <span class="badge kind">📋 Pasted text</span>
-          <span class="badge kind">✍️ Typed by hand</span>
+          <span class="badge kind">📷 ${t('Photos & scans')}</span>
+          <span class="badge kind">📄 ${t('PDFs & documents')}</span>
+          <span class="badge kind">📋 ${t('Pasted text')}</span>
+          <span class="badge kind">✍️ ${t('Typed by hand')}</span>
         </div>
-        <button class="btn primary" data-open-add>Add your first recipe</button>
-        <p class="muted" style="font-size:14px;margin-top:18px">Tip: you can also drag files or links onto this page, or paste with Ctrl/⌘+V.</p>
+        <button class="btn primary" data-open-add>${t('Add your first recipe')}</button>
+        <p class="muted" style="font-size:14px;margin-top:18px">${t('Tip: you can also drag files or links onto this page, or paste with Ctrl/⌘+V.')}</p>
       </div>`;
     return;
   }
 
   view.innerHTML = `${chips}
     ${recipes.length ? `<div class="grid">${recipes.map(card).join('')}</div>`
-    : `<div class="empty"><div class="big">🔍</div><h2>No matches</h2><p>Try a different search or filter.</p></div>`}`;
+    : `<div class="empty"><div class="big">🔍</div><h2>${t('No matches')}</h2><p>${t('Try a different search or filter.')}</p></div>`}`;
   hideBrokenImages(view);
 }
 
@@ -304,7 +316,7 @@ function card(r) {
       <div class="thumb">
         ${kind.icon}
         ${cover ? `<img src="${esc(cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
-        ${r.favorite ? '<span class="fav" aria-label="Favorite">⭐</span>' : ''}
+        ${r.favorite ? `<span class="fav" aria-label="${t('Favorite')}">⭐</span>` : ''}
       </div>
       <div class="card-body">
         <div class="card-title">${esc(r.title)}</div>
@@ -359,15 +371,15 @@ function listHtml(items, kind, factor = 1, title = '') {
       return `<li><label><input type="checkbox"><span>${ingredientHtml(line, factor)}</span></label></li>`;
     }
     n++;
-    return `<li class="step">${stepWithTimers(line, `Step ${n} · ${title}`)}</li>`;
+    return `<li class="step">${stepWithTimers(line, t('Step {n} · {title}', { n, title }))}</li>`;
   }).join('');
 }
 
 function attachmentHtml(r, a) {
   const url = fileUrl(a);
-  const remove = `<button class="btn ghost small" data-remove-file="${a.id}" aria-label="Remove ${esc(a.name)}">✕</button>`;
+  const remove = `<button class="btn ghost small" data-remove-file="${a.id}" aria-label="${esc(t('Remove {name}', { name: a.name }))}">✕</button>`;
   const cover = isImage(a) && r.imageUrl !== url
-    ? `<button class="btn ghost small" data-cover="${a.id}" title="Use as cover photo">Cover</button>` : '';
+    ? `<button class="btn ghost small" data-cover="${a.id}" title="${t('Use as cover photo')}">${t('Cover')}</button>` : '';
   const name = `<div class="name"><span title="${esc(a.name)}">${esc(a.name)}</span><span class="row">${cover}${remove}</span></div>`;
   if (a.type === 'application/pdf') {
     return `<div class="file wide"><iframe src="${url}" title="${esc(a.name)}" loading="lazy"></iframe>${name}</div>`;
@@ -388,68 +400,71 @@ function attachmentHtml(r, a) {
     </div>`;
 }
 
-function renderRecipe(r) {
+function renderRecipe(rec) {
+  // "Show original" displays the text from before translation; everything else acts on the stored recipe.
+  const r = state.showOriginal && rec.original ? Kit.normalizeRecipe({ ...rec, ...rec.original }) : rec;
   document.title = `${r.title} · Recipe Box`;
   const embed = r.videoUrl ? videoEmbed(r.videoUrl) : null;
   const cover = r.imageUrl && !(embed && r.source?.type === 'video') ? r.imageUrl : '';
   const scalable = r.ingredients.some((l) => Kit.QTY.test(l));
-  const facts = [['Makes', scalable ? '' : r.servings], ['Prep', r.prepTime], ['Cook', r.cookTime], ['Total', r.totalTime]]
+  const facts = [[t('Makes'), scalable ? '' : r.servings], [t('Prep'), r.prepTime], [t('Cook'), r.cookTime], [t('Total'), r.totalTime]]
     .filter(([, v]) => v);
   const hasBody = r.ingredients.length || r.instructions.length;
   const factor = servingsFactor(r);
 
   view.innerHTML = `
     <article class="recipe">
-      <a href="/" class="back" data-link>← All recipes</a>
+      <a href="/" class="back" data-link>← ${t('All recipes')}</a>
+      ${translationBanner(r)}
       ${cover ? `<img class="hero" src="${esc(cover)}" alt="" referrerpolicy="no-referrer">` : ''}
       <div class="recipe-head">
         <h1>${esc(r.title)}</h1>
         <div class="actions">
-          <button class="btn icon ghost" data-action="fav" aria-pressed="${r.favorite}" title="${r.favorite ? 'Remove from favorites' : 'Add to favorites'}">${r.favorite ? '⭐' : '☆'}</button>
-          <a class="btn" href="/recipe/${r.id}/edit" data-link>Edit</a>
-          <button class="btn" data-action="print">Print</button>
-          <button class="btn danger" data-action="delete">Delete</button>
+          <button class="btn icon ghost" data-action="fav" aria-pressed="${r.favorite}" title="${r.favorite ? t('Remove from favorites') : t('Add to favorites')}">${r.favorite ? '⭐' : '☆'}</button>
+          <a class="btn" href="/recipe/${r.id}/edit" data-link>${t('Edit')}</a>
+          <button class="btn" data-action="print">${t('Print')}</button>
+          <button class="btn danger" data-action="delete">${t('Delete')}</button>
         </div>
       </div>
-      <div class="stars" role="group" aria-label="Rating">
-        ${[1, 2, 3, 4, 5].map((n) => `<button data-rate="${n}" class="${n <= r.rating ? 'on' : ''}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}
+      <div class="stars" role="group" aria-label="${t('Rating')}">
+        ${[1, 2, 3, 4, 5].map((n) => `<button data-rate="${n}" class="${n <= r.rating ? 'on' : ''}" aria-label="${starLabel(n)}">★</button>`).join('')}
       </div>
-      ${r.source?.url ? `<div class="source">From <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${esc(hostOf(r.source.url))}</a></div>` : ''}
+      ${r.source?.url ? `<div class="source">${t('From')} <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${esc(hostOf(r.source.url))}</a></div>` : ''}
       ${r.tags.length ? `<div class="tags">${r.tags.map((t) => `<span class="badge">${esc(t)}</span>`).join('')}</div>` : ''}
       ${r.description ? `<p class="description">${esc(r.description)}</p>` : ''}
       ${facts.length ? `<div class="facts">${facts.map(([k, v]) => `<div class="fact"><small>${k}</small>${esc(v)}</div>`).join('')}</div>` : ''}
 
-      ${embed ? `<div class="video${embed.tall ? ' tall' : ''}"><iframe src="${esc(embed.src)}" title="Recipe video" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen loading="lazy"></iframe></div>`
-      : r.videoUrl ? `<a class="video-link" href="${esc(r.videoUrl)}" target="_blank" rel="noopener"><span class="play">▶</span><span><strong>Watch the video</strong><small>${esc(hostOf(r.videoUrl))}</small></span></a>` : ''}
+      ${embed ? `<div class="video${embed.tall ? ' tall' : ''}"><iframe src="${esc(embed.src)}" title="${t('Recipe video')}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen loading="lazy"></iframe></div>`
+      : r.videoUrl ? `<a class="video-link" href="${esc(r.videoUrl)}" target="_blank" rel="noopener"><span class="play">▶</span><span><strong>${t('Watch the video')}</strong><small>${esc(hostOf(r.videoUrl))}</small></span></a>` : ''}
 
-      ${r.instructions.some((l) => !l.startsWith('## ')) ? '<button class="btn primary cook-start" data-cook>▶ Start cooking</button>' : ''}
+      ${r.instructions.some((l) => !l.startsWith('## ')) ? `<button class="btn primary cook-start" data-cook>▶ ${t('Start cooking')}</button>` : ''}
       ${hasBody ? `
       <div class="columns">
         <section>
           <div class="section-title">
-            <h2>Ingredients</h2>
+            <h2>${t('Ingredients')}</h2>
             ${scalable ? servingsStepper(r) : ''}
           </div>
-          ${r.ingredients.length ? `<ul class="ingredients">${listHtml(r.ingredients, 'ingredients', factor)}</ul>` : '<p class="muted">No ingredients listed.</p>'}
+          ${r.ingredients.length ? `<ul class="ingredients">${listHtml(r.ingredients, 'ingredients', factor)}</ul>` : `<p class="muted">${t('No ingredients listed.')}</p>`}
         </section>
         <section>
-          <div class="section-title"><h2>Steps</h2></div>
-          ${r.instructions.length ? `<ol class="steps">${listHtml(r.instructions, 'steps', 1, r.title)}</ol>` : '<p class="muted">No steps listed.</p>'}
+          <div class="section-title"><h2>${t('Steps')}</h2></div>
+          ${r.instructions.length ? `<ol class="steps">${listHtml(r.instructions, 'steps', 1, r.title)}</ol>` : `<p class="muted">${t('No steps listed.')}</p>`}
         </section>
       </div>` : ''}
 
-      ${r.notes ? `<div class="notes"><strong>Notes</strong><br>${esc(r.notes)}</div>` : ''}
+      ${r.notes ? `<div class="notes"><strong>${t('Notes')}</strong><br>${esc(r.notes)}</div>` : ''}
 
       <section class="attachments">
         <div class="section-title">
-          <h2>Files & photos</h2>
+          <h2>${t('Files & photos')}</h2>
           <label class="btn small">
             <input type="file" multiple hidden data-add-files>
-            + Add files
+            + ${t('Add files')}
           </label>
         </div>
         ${r.attachments.length ? `<div class="files">${r.attachments.map((a) => attachmentHtml(r, a)).join('')}</div>`
-        : `<p class="muted">${hasBody ? 'Attach photos of the finished dish, a scan of the original, or anything else.' : 'Nothing here yet. Add a photo, PDF or any file — or edit the recipe to type out the ingredients and steps.'}</p>`}
+        : `<p class="muted">${hasBody ? t('Attach photos of the finished dish, a scan of the original, or anything else.') : t('Nothing here yet. Add a photo, PDF or any file, or edit the recipe to type out the ingredients and steps.')}</p>`}
       </section>
     </article>`;
   hideBrokenImages(view);
@@ -458,52 +473,74 @@ function renderRecipe(r) {
 
   const save = async (patch, msg) => {
     try {
-      Object.assign(r, Kit.normalizeRecipe(await api.update(r.id, patch)));
+      Object.assign(rec, Kit.normalizeRecipe(await api.update(r.id, patch)));
       if (msg) toast(msg);
-      renderRecipe(r);
+      renderRecipe(rec);
     } catch (err) {
       toast(err.message);
     }
   };
 
   view.onclick = async (e) => {
-    const t = e.target;
-    if (t.closest('[data-tstart]')) return; // timers are handled globally
-    if (t.closest('[data-cook]')) return openCook(r);
-    const serv = t.closest('[data-serv]');
+    const target = e.target;
+    if (target.closest('[data-tstart]')) return; // timers are handled globally
+    if (target.closest('[data-cook]')) return openCook(r);
+    const serv = target.closest('[data-serv]');
     if (serv) {
       const b = servingsBase(r);
       servingsPick.set(r.id, Math.max(b.step, pickedServings(r) + Number(serv.dataset.serv) * b.step));
-      return renderRecipe(r);
+      return renderRecipe(rec);
     }
-    if (t.closest('[data-servreset]')) { servingsPick.delete(r.id); return renderRecipe(r); }
-    const action = t.closest('[data-action]')?.dataset.action;
-    if (action === 'fav') return save({ favorite: !r.favorite }, r.favorite ? 'Removed from favorites' : 'Added to favorites');
+    if (target.closest('[data-servreset]')) { servingsPick.delete(r.id); return renderRecipe(rec); }
+    const action = target.closest('[data-action]')?.dataset.action;
+    if (action === 'fav') return save({ favorite: !r.favorite }, r.favorite ? t('Removed from favorites') : t('Added to favorites'));
     if (action === 'print') return window.print();
     if (action === 'delete') {
-      if (!confirm(`Delete "${r.title}" and all its files? This can't be undone.`)) return;
+      if (!confirm(t('Delete "{title}" and all its files? This can\'t be undone.', { title: r.title }))) return;
       await api.remove(r.id);
-      toast('Recipe deleted');
+      toast(t('Recipe deleted'));
       return navigate('/', { replace: true });
     }
-    const rate = t.closest('[data-rate]');
+    const rate = target.closest('[data-rate]');
     if (rate) {
       const n = Number(rate.dataset.rate);
       return save({ rating: n === r.rating ? 0 : n });
     }
-    const step = t.closest('li.step');
+    const step = target.closest('li.step');
     if (step) return step.classList.toggle('done');
-    const rm = t.closest('[data-remove-file]');
+    const rm = target.closest('[data-remove-file]');
     if (rm) {
-      if (!confirm('Remove this file?')) return;
+      if (!confirm(t('Remove this file?'))) return;
       const fileId = rm.dataset.removeFile;
       await api.removeFile(r.id, fileId);
       const wasCover = r.imageUrl === `/files/${fileId}`;
       if (wasCover) await api.update(r.id, { imageUrl: '' });
       return renderRecipe(Kit.normalizeRecipe(await api.get(r.id)));
     }
-    const cov = t.closest('[data-cover]');
-    if (cov) return save({ imageUrl: `/files/${cov.dataset.cover}` }, 'Cover photo updated');
+    const cov = target.closest('[data-cover]');
+    if (cov) return save({ imageUrl: `/files/${cov.dataset.cover}` }, t('Cover photo updated'));
+    if (target.closest('[data-show-original]')) { state.showOriginal = !state.showOriginal; return renderRecipe(rec); }
+    const tr = target.closest('[data-translate-now]');
+    if (tr) {
+      tr.disabled = true;
+      tr.innerHTML = `<span class="spinner"></span>${t('Translating…')}`;
+      try {
+        Object.assign(rec, Kit.normalizeRecipe(await api.translate(rec.id, getLang())));
+        toast(t('Recipe translated'));
+      } catch (err) { toast(err.message); }
+      return renderRecipe(rec);
+    }
+    if (target.closest('[data-restore-original]')) {
+      if (!confirm(t('Go back to the original text? The translation will be removed.'))) return;
+      try {
+        const back = await api.restoreOriginal(r.id);
+        for (const k of Object.keys(rec)) if (!(k in back)) delete rec[k];
+        Object.assign(rec, Kit.normalizeRecipe(back));
+        state.showOriginal = false;
+        toast(t('Original restored'));
+      } catch (err) { toast(err.message); }
+      return renderRecipe(rec);
+    }
   };
 
   view.onchange = async (e) => {
@@ -526,7 +563,7 @@ async function uploadAll(id, files, onProgress) {
     }
     done++;
   }
-  if (!onProgress) toast(`Added ${files.length} file${files.length > 1 ? 's' : ''}`);
+  if (!onProgress) toast(files.length === 1 ? t('Added 1 file') : t('Added {n} files', { n: files.length }));
 }
 
 // ---------- Editor ----------
@@ -538,68 +575,68 @@ function renderEditor(existing) {
     state.pendingFiles = [];
   }
   const r = existing || state.draft;
-  document.title = `${isNew ? 'New recipe' : `Edit ${r.title}`} · Recipe Box`;
+  document.title = `${isNew ? t('New recipe') : t('Edit {title}', { title: r.title })} · Recipe Box`;
   const lines = (v) => esc((v || []).join('\n'));
   const val = (v) => esc(v ?? '');
 
   const empty = !r.ingredients?.length && !r.instructions?.length;
   const photos = () => (isNew ? state.pendingFiles.filter((f) => /^image\//.test(f.type)) : (r.attachments || []).filter(isImage));
   const pasteBox = (lead) => `<div class="import-note paste-note"><span>${lead}</span>
-      <textarea id="paste-in" rows="5" placeholder="Paste the recipe here" aria-label="Recipe text"></textarea>
-      <div class="row wrap"><button type="button" class="btn primary small" data-readtext>${state.ai ? '✨ Fill in with Claude' : 'Fill in'}</button>
-      ${state.ai ? '<button type="button" class="btn small" data-readphotos hidden>✨ Read from photos instead</button>' : ''}</div></div>`;
+      <textarea id="paste-in" rows="5" placeholder="${t('Paste the recipe here')}" aria-label="${t('Recipe text')}"></textarea>
+      <div class="row wrap"><button type="button" class="btn primary small" data-readtext>${state.ai ? `✨ ${t('Fill in with Claude')}` : t('Fill in')}</button>
+      ${state.ai ? `<button type="button" class="btn small" data-readphotos hidden>✨ ${t('Read from photos instead')}</button>` : ''}</div></div>`;
   let note = '';
   if (isNew && r.source?.type === 'url' && r.structured === false && empty) {
-    note = pasteBox(`This page didn't include a structured recipe, so only the title and picture were saved. Copy the recipe from <a href="${esc(r.source.url)}" target="_blank" rel="noopener">the page</a> and paste it here${state.ai ? ', or add a screenshot below and let Claude read it' : ''}.`);
+    note = pasteBox(`${esc(t('This page didn\'t include a structured recipe, so only the title and picture were saved.'))} <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${t('Open the page')}</a>, ${esc(state.ai ? t('copy the recipe and paste it here, or add a screenshot below and let Claude read it.') : t('copy the recipe and paste it here.'))}`);
   } else if (isNew && r.source?.type === 'video' && empty) {
-    note = pasteBox('Video saved. If the recipe is in the caption or description, copy it and paste it here.');
+    note = pasteBox(esc(t('Video saved. If the recipe is in the caption or description, copy it and paste it here.')));
   } else if (isNew && !empty && !r.filled) {
-    note = `<div class="import-note">Found ${r.ingredients?.length || 0} ingredients and ${r.instructions?.length || 0} steps. Check them over, then save.</div>`;
+    note = `<div class="import-note">${esc(t('Found {ingredients} ingredients and {steps} steps. Check them over, then save.', { ingredients: r.ingredients?.length || 0, steps: r.instructions?.length || 0 }))}</div>`;
   } else if (empty) {
-    note = pasteBox(`Have the recipe as text${state.ai ? ' or photos' : ''}? Paste the text here${state.ai ? ' and Claude will sort it into ingredients and steps' : ''}, or fill in the fields below.`);
+    note = pasteBox(esc(state.ai ? t('Have the recipe as text or photos? Paste the text here and Claude will sort it into ingredients and steps, or fill in the fields below.') : t('Have the recipe as text? Paste it here, or fill in the fields below.')));
   }
 
   view.innerHTML = `
     <form class="editor" id="editor" novalidate>
-      <a href="${isNew ? '/' : `/recipe/${r.id}`}" class="back" data-link>← ${isNew ? 'Cancel' : 'Back to recipe'}</a>
-      <h1>${isNew ? 'New recipe' : 'Edit recipe'}</h1>
+      <a href="${isNew ? '/' : `/recipe/${r.id}`}" class="back" data-link>← ${isNew ? t('Cancel') : t('Back to recipe')}</a>
+      <h1>${isNew ? t('New recipe') : t('Edit recipe')}</h1>
       ${note}
-      <label class="field"><span>Title</span>
-        <input name="title" value="${val(r.title)}" placeholder="Recipe name" required></label>
-      <label class="field"><span>Description</span>
-        <textarea name="description" rows="2" placeholder="A few words about this recipe">${val(r.description)}</textarea></label>
+      <label class="field"><span>${t('Title')}</span>
+        <input name="title" value="${val(r.title)}" placeholder="${t('Recipe name')}" required></label>
+      <label class="field"><span>${t('Description')}</span>
+        <textarea name="description" rows="2" placeholder="${t('A few words about this recipe')}">${val(r.description)}</textarea></label>
       <div class="grid-2">
-        <label class="field"><span>Ingredients</span>
-          <textarea name="ingredients" rows="10" placeholder="One ingredient per line">${lines(r.ingredients)}</textarea>
-          <small>One per line. Start a line with ## to make a group heading.</small></label>
-        <label class="field"><span>Steps</span>
-          <textarea name="instructions" rows="10" placeholder="One step per line">${lines(r.instructions)}</textarea>
-          <small>One step per line.</small></label>
+        <label class="field"><span>${t('Ingredients')}</span>
+          <textarea name="ingredients" rows="10" placeholder="${t('One ingredient per line')}">${lines(r.ingredients)}</textarea>
+          <small>${t('One per line. Start a line with ## to make a group heading.')}</small></label>
+        <label class="field"><span>${t('Steps')}</span>
+          <textarea name="instructions" rows="10" placeholder="${t('One step per line')}">${lines(r.instructions)}</textarea>
+          <small>${t('One step per line.')}</small></label>
       </div>
       <div class="grid-3">
-        <label class="field"><span>Makes</span><input name="servings" value="${val(r.servings)}" placeholder="e.g. 4 people, 20 slices"></label>
-        <label class="field"><span>Prep time</span><input name="prepTime" value="${val(r.prepTime)}" placeholder="e.g. 15 min"></label>
-        <label class="field"><span>Cook time</span><input name="cookTime" value="${val(r.cookTime)}" placeholder="e.g. 30 min"></label>
-        <label class="field"><span>Total time</span><input name="totalTime" value="${val(r.totalTime)}" placeholder="e.g. 45 min"></label>
+        <label class="field"><span>${t('Makes')}</span><input name="servings" value="${val(r.servings)}" placeholder="${t('e.g. 4 people, 20 slices')}"></label>
+        <label class="field"><span>${t('Prep time')}</span><input name="prepTime" value="${val(r.prepTime)}" placeholder="${t('e.g. {time}', { time: '15 min' })}"></label>
+        <label class="field"><span>${t('Cook time')}</span><input name="cookTime" value="${val(r.cookTime)}" placeholder="${t('e.g. {time}', { time: '30 min' })}"></label>
+        <label class="field"><span>${t('Total time')}</span><input name="totalTime" value="${val(r.totalTime)}" placeholder="${t('e.g. {time}', { time: '45 min' })}"></label>
       </div>
-      <label class="field"><span>Tags</span>
-        <input name="tags" value="${val((r.tags || []).join(', '))}" placeholder="e.g. dessert, baking" list="tag-list">
-        <small>Separate with commas.</small></label>
-      <label class="field"><span>Notes</span>
-        <textarea name="notes" rows="3" placeholder="Substitutions, tweaks, who loved it…">${val(r.notes)}</textarea></label>
+      <label class="field"><span>${t('Tags')}</span>
+        <input name="tags" value="${val((r.tags || []).join(', '))}" placeholder="${t('e.g. dessert, baking')}" list="tag-list">
+        <small>${t('Separate with commas.')}</small></label>
+      <label class="field"><span>${t('Notes')}</span>
+        <textarea name="notes" rows="3" placeholder="${t('Substitutions, tweaks, who loved it…')}">${val(r.notes)}</textarea></label>
       <div class="grid-2">
-        <label class="field"><span>Source link</span><input name="sourceUrl" type="url" value="${val(r.source?.url)}" placeholder="https://…"></label>
-        <label class="field"><span>Video link</span><input name="videoUrl" type="url" value="${val(r.videoUrl)}" placeholder="YouTube, TikTok, Instagram…"></label>
+        <label class="field"><span>${t('Source link')}</span><input name="sourceUrl" type="url" value="${val(r.source?.url)}" placeholder="https://…"></label>
+        <label class="field"><span>${t('Video link')}</span><input name="videoUrl" type="url" value="${val(r.videoUrl)}" placeholder="YouTube, TikTok, Instagram…"></label>
       </div>
-      <label class="field"><span>Cover image link</span><input name="imageUrl" value="${val(r.imageUrl)}" placeholder="https://… (or pick a cover from attached photos)"></label>
+      <label class="field"><span>${t('Cover image link')}</span><input name="imageUrl" value="${val(r.imageUrl)}" placeholder="${t('https://… (or pick a cover from attached photos)')}"></label>
       ${isNew ? `
-      <div class="field"><span>Files & photos</span>
+      <div class="field"><span>${t('Files & photos')}</span>
         <div class="pending-files" id="pending"></div>
-        <div><label class="btn small"><input type="file" multiple hidden id="pending-input">+ Add files</label></div>
+        <div><label class="btn small"><input type="file" multiple hidden id="pending-input">+ ${t('Add files')}</label></div>
       </div>` : ''}
       <div class="editor-actions">
-        <a class="btn ghost" href="${isNew ? '/' : `/recipe/${r.id}`}" data-link>Cancel</a>
-        <button class="btn primary" type="submit" id="save-btn">Save recipe</button>
+        <a class="btn ghost" href="${isNew ? '/' : `/recipe/${r.id}`}" data-link>${t('Cancel')}</a>
+        <button class="btn primary" type="submit" id="save-btn">${t('Save recipe')}</button>
       </div>
     </form>`;
 
@@ -612,8 +649,8 @@ function renderEditor(existing) {
     if (!box) return;
     box.innerHTML = state.pendingFiles.map((f, i) => `
       <span class="badge">${fileIcon({ type: f.type, name: f.name })} ${esc(f.name)} · ${formatSize(f.size)}
-        <button type="button" data-unpend="${i}" aria-label="Remove ${esc(f.name)}">✕</button></span>`).join('')
-      || '<span class="muted" style="font-size:14px">No files attached.</span>';
+        <button type="button" data-unpend="${i}" aria-label="${esc(t('Remove {name}', { name: f.name }))}">✕</button></span>`).join('')
+      || `<span class="muted" style="font-size:14px">${t('No files attached.')}</span>`;
     const rp = $('[data-readphotos]');
     if (rp) rp.hidden = !photos().length;
   };
@@ -646,25 +683,25 @@ function renderEditor(existing) {
     const rt = e.target.closest('[data-readtext]');
     if (rt) {
       const text = $('#paste-in').value.trim();
-      if (!text) { toast('Paste the recipe text into the box first.'); return $('#paste-in').focus(); }
-      busy(rt, 'Reading…');
+      if (!text) { toast(t('Paste the recipe text into the box first.')); return $('#paste-in').focus(); }
+      busy(rt, t('Reading…'));
       try {
         const d = state.ai ? await api.aiExtract({ text }).catch(() => api.importText(text)) : await api.importText(text);
-        if (!d.ingredients?.length && !d.instructions?.length) { toast('No recipe found in that text. Copy the part with the ingredients and steps.'); return idle(rt, 'Try again'); }
-        fill(d, 'Filled in from the text. Check it over, then save.');
-      } catch (err) { toast(err.message); idle(rt, 'Try again'); }
+        if (!d.ingredients?.length && !d.instructions?.length) { toast(t('No recipe found in that text. Copy the part with the ingredients and steps.')); return idle(rt, t('Try again')); }
+        fill(d, t('Filled in from the text. Check it over, then save.'));
+      } catch (err) { toast(err.message); idle(rt, t('Try again')); }
     }
     const rp = e.target.closest('[data-readphotos]');
     if (rp) {
-      busy(rp, 'Reading… this can take up to a minute');
+      busy(rp, t('Reading… this can take up to a minute'));
       try {
         const blobs = isNew ? photos() : await Promise.all(photos().map(async (a) => (await fetch(fileUrl(a))).blob()));
         const images = [];
         for (const b of blobs.slice(0, 6)) images.push(await imageForClaude(b));
         const d = await api.aiExtract({ images });
-        if (!d.ingredients?.length && !d.instructions?.length) { toast('Claude couldn\u2019t find a recipe in those photos.'); return idle(rp, 'Try again'); }
-        fill(d, 'Filled in from your photos. Check it over, then save.');
-      } catch (err) { toast(err.message); idle(rp, '✨ Try again'); }
+        if (!d.ingredients?.length && !d.instructions?.length) { toast(t('Claude couldn’t find a recipe in those photos.')); return idle(rp, t('Try again')); }
+        fill(d, t('Filled in from your photos. Check it over, then save.'));
+      } catch (err) { toast(err.message); idle(rp, `✨ ${t('Try again')}`); }
     }
   };
   form.onchange = (e) => {
@@ -698,29 +735,31 @@ function renderEditor(existing) {
     };
     const btn = $('#save-btn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span>Saving…';
+    btn.innerHTML = `<span class="spinner"></span>${t('Saving…')}`;
     try {
       if (isNew) {
         const created = await api.create(body);
         const files = state.pendingFiles;
         if (files.length) {
           await uploadAll(created.id, files, (done, total) => {
-            btn.innerHTML = `<span class="spinner"></span>Uploading ${done + 1} of ${total}…`;
+            btn.innerHTML = `<span class="spinner"></span>${t('Uploading {n} of {total}…', { n: done + 1, total })}`;
           });
         }
         state.draft = null;
         state.pendingFiles = [];
-        toast('Recipe saved');
+        toast(t('Recipe saved'));
+        await autoTranslate(created, btn);
         navigate(`/recipe/${created.id}`, { replace: true });
       } else {
-        await api.update(r.id, body);
-        toast('Changes saved');
+        const saved = await api.update(r.id, body);
+        toast(t('Changes saved'));
+        await autoTranslate(saved, btn);
         navigate(`/recipe/${r.id}`, { replace: true });
       }
     } catch (err) {
       toast(err.message);
       btn.disabled = false;
-      btn.textContent = 'Save recipe';
+      btn.textContent = t('Save recipe');
     }
   };
 }
@@ -766,12 +805,12 @@ dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(
 async function importLink(url) {
   openAdd('link');
   $('#link-input').value = url;
-  setStatus('Fetching the recipe…', { busy: true });
+  setStatus(t('Fetching the recipe…'), { busy: true });
   try {
     const draft = await api.importUrl(url);
     startDraft(draft);
   } catch (err) {
-    setStatus(`${esc(err.message)}. <button class="btn small" id="save-link-anyway">Save the link anyway</button>`, { error: true, html: true });
+    setStatus(`${esc(err.message)}. <button class="btn small" id="save-link-anyway">${t('Save the link anyway')}</button>`, { error: true, html: true });
     $('#save-link-anyway').onclick = () => {
       const video = Boolean(videoEmbed(url)) || /tiktok|instagram|youtu|vimeo|facebook/i.test(url);
       startDraft({
@@ -792,7 +831,7 @@ $('#link-form').addEventListener('submit', (e) => {
 async function importText(text) {
   openAdd('text');
   $('#text-input').value = text;
-  setStatus(state.ai ? 'Claude is reading your recipe…' : 'Reading your recipe…', { busy: true });
+  setStatus(state.ai ? t('Claude is reading your recipe…') : t('Reading your recipe…'), { busy: true });
   try {
     let draft = null;
     if (state.ai) {
@@ -948,7 +987,7 @@ function startTimer(secs, label) {
   timers.push({ id: Math.random().toString(36).slice(2), label, end: Date.now() + secs * 1000, paused: false, remaining: 0, done: false });
   saveTimers();
   renderTimers();
-  toast(`Timer started: ${Kit.fmtDur(secs)}`);
+  toast(t('Timer started: {time}', { time: Kit.fmtDur(secs) }));
 }
 
 function timerAction(id, act) {
@@ -971,12 +1010,12 @@ function vibrate() {
 }
 
 function renderTimers() {
-  const html = timers.map((t) => `
-    <div class="timer${t.paused ? ' paused' : ''}${t.done ? ' done' : ''}" data-tid="${t.id}">
-      <span class="tinfo"><span class="tt">${t.done ? 'Done!' : Kit.fmtClock(timeLeft(t))}</span><span class="tl">${esc(t.label)}</span></span>
-      ${t.done ? '' : `<button class="btn" data-tact="pause" aria-label="${t.paused ? 'Resume' : 'Pause'} timer">${t.paused ? '▶' : '❚❚'}</button>`}
-      <button class="btn" data-tact="add" aria-label="Add one minute">+1 min</button>
-      <button class="btn" data-tact="cancel" aria-label="${t.done ? 'Dismiss' : 'Cancel'} timer">${t.done ? 'OK' : '✕'}</button>
+  const html = timers.map((tm) => `
+    <div class="timer${tm.paused ? ' paused' : ''}${tm.done ? ' done' : ''}" data-tid="${tm.id}">
+      <span class="tinfo"><span class="tt">${tm.done ? t('Done!') : Kit.fmtClock(timeLeft(tm))}</span><span class="tl">${esc(tm.label)}</span></span>
+      ${tm.done ? '' : `<button class="btn" data-tact="pause" aria-label="${tm.paused ? t('Resume timer') : t('Pause timer')}">${tm.paused ? '▶' : '❚❚'}</button>`}
+      <button class="btn" data-tact="add" aria-label="${t('Add one minute')}">+1 min</button>
+      <button class="btn" data-tact="cancel" aria-label="${tm.done ? t('Dismiss timer') : t('Cancel timer')}">${tm.done ? 'OK' : '✕'}</button>
     </div>`).join('');
   $$('[data-timer-tray]').forEach((tray) => { tray.innerHTML = html; });
   $('#timer-float').hidden = !timers.length || !!state.cook;
@@ -1039,7 +1078,7 @@ function closeCook() {
   try { wakeLock?.release(); } catch { /* already released */ }
   wakeLock = null;
   renderTimers();
-  if (r && location.pathname === `/recipe/${r.id}`) renderRecipe(r);
+  if (r && location.pathname === `/recipe/${r.id}`) render();
 }
 
 function renderCook() {
@@ -1051,37 +1090,37 @@ function renderCook() {
   const factor = servingsFactor(r);
   const ingList = r.ingredients.map((l, k) => (l.startsWith('## ') ? `<li class="group">${esc(l.slice(3))}</li>`
     : `<li><label><input type="checkbox" data-cookcheck="${k}"${state.cook.checked.has(k) ? ' checked' : ''}><span>${ingredientHtml(l, factor)}</span></label></li>`)).join('');
-  const label = (n) => `Step ${n} · ${r.title}`;
+  const label = (n) => t('Step {n} · {title}', { n, title: r.title });
   let body;
   if (pg.kind === 'ing') {
-    body = `<p class="cook-section">Get ready · for ${esc(amountLabel(r))}</p>
-      <h2 class="cook-big">Ingredients</h2><ul class="ingredients">${ingList}</ul>`;
+    body = `<p class="cook-section">${esc(t('Get ready · for {amount}', { amount: amountLabel(r) }))}</p>
+      <h2 class="cook-big">${t('Ingredients')}</h2><ul class="ingredients">${ingList}</ul>`;
   } else if (pg.kind === 'step') {
     const ds = Kit.findDurations(pg.text);
-    body = `<p class="cook-section">${esc(pg.section || `Step ${pg.n}`)}</p>
+    body = `<p class="cook-section">${esc(pg.section || t('Step {n}', { n: pg.n }))}</p>
       <p class="cook-step">${stepWithTimers(pg.text, label(pg.n))}</p>
-      ${ds.length ? `<div class="cook-timers">${ds.map((d) => `<button class="btn primary" data-tstart="${d.secs}" data-tlabel="${esc(label(pg.n))}">⏱ Start ${esc(Kit.fmtDur(d.secs))} timer</button>${d.max ? `<button class="btn" data-tstart="${d.max}" data-tlabel="${esc(label(pg.n))}">⏱ ${esc(Kit.fmtDur(d.max))}</button>` : ''}`).join('')}</div>` : ''}
-      ${ingList ? `<details><summary>Show ingredients</summary><ul class="ingredients">${ingList}</ul></details>` : ''}`;
+      ${ds.length ? `<div class="cook-timers">${ds.map((d) => `<button class="btn primary" data-tstart="${d.secs}" data-tlabel="${esc(label(pg.n))}">⏱ ${esc(t('Start {time} timer', { time: Kit.fmtDur(d.secs) }))}</button>${d.max ? `<button class="btn" data-tstart="${d.max}" data-tlabel="${esc(label(pg.n))}">⏱ ${esc(Kit.fmtDur(d.max))}</button>` : ''}`).join('')}</div>` : ''}
+      ${ingList ? `<details><summary>${t('Show ingredients')}</summary><ul class="ingredients">${ingList}</ul></details>` : ''}`;
   } else {
     body = `<div class="cook-done">
-      <div class="big" aria-hidden="true">🍽️</div><h2 class="cook-big">Enjoy your meal!</h2>
-      <p class="muted">How did it turn out?</p>
-      <div class="stars cook-stars" role="group" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button data-cookrate="${n}" class="${n <= (r.rating || 0) ? 'on' : ''}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}</div></div>`;
+      <div class="big" aria-hidden="true">🍽️</div><h2 class="cook-big">${t('Enjoy your meal!')}</h2>
+      <p class="muted">${t('How did it turn out?')}</p>
+      <div class="stars cook-stars" role="group" aria-label="${t('Rating')}">${[1, 2, 3, 4, 5].map((n) => `<button data-cookrate="${n}" class="${n <= (r.rating || 0) ? 'on' : ''}" aria-label="${starLabel(n)}">★</button>`).join('')}</div></div>`;
   }
   const stepNo = pg.kind === 'step' ? pg.n : pg.kind === 'ing' ? 0 : steps;
   $('#cook-root').innerHTML = `
-    <div class="cook" role="dialog" aria-modal="true" aria-label="Cooking ${esc(r.title)}">
+    <div class="cook" role="dialog" aria-modal="true" aria-label="${esc(t('Cooking {title}', { title: r.title }))}">
       <div class="cook-top">
-        <button class="btn" data-cookclose>✕ Close</button>
+        <button class="btn" data-cookclose>✕ ${t('Close')}</button>
         <div class="cook-title">${esc(r.title)}</div>
-        <span class="cook-count">${pg.kind === 'ing' ? 'Ingredients' : pg.kind === 'done' ? 'Finished' : `Step ${pg.n} of ${steps}`}</span>
+        <span class="cook-count">${pg.kind === 'ing' ? t('Ingredients') : pg.kind === 'done' ? t('Finished') : t('Step {n} of {total}', { n: pg.n, total: steps })}</span>
       </div>
       <div class="cook-progress" aria-hidden="true"><span style="width:${steps ? Math.round((stepNo / steps) * 100) : 100}%"></span></div>
       <div class="tray" data-timer-tray aria-live="polite"></div>
       <div class="cook-body" id="cook-body">${body}</div>
       <div class="cook-nav">
-        <button class="btn" data-cookprev ${i === 0 ? 'disabled style="visibility:hidden"' : ''}>← Back</button>
-        ${pg.kind === 'done' ? '<button class="btn primary" data-cookclose>Close</button>' : `<button class="btn primary" data-cooknext>${i === pages.length - 2 ? 'Finish' : 'Next'} →</button>`}
+        <button class="btn" data-cookprev ${i === 0 ? 'disabled style="visibility:hidden"' : ''}>← ${t('Back')}</button>
+        ${pg.kind === 'done' ? `<button class="btn primary" data-cookclose>${t('Close')}</button>` : `<button class="btn primary" data-cooknext>${i === pages.length - 2 ? t('Finish') : t('Next')} →</button>`}
       </div>
     </div>`;
   renderTimers();
@@ -1096,25 +1135,25 @@ function cookGo(delta) {
 
 // Timer and cooking-mode buttons work on every page.
 document.addEventListener('click', async (e) => {
-  const t = e.target;
+  const target = e.target;
   let el;
-  if ((el = t.closest('[data-tstart]'))) { e.preventDefault(); return startTimer(Number(el.dataset.tstart), el.dataset.tlabel || 'Timer'); }
-  if ((el = t.closest('[data-tact]'))) return timerAction(el.closest('[data-tid]').dataset.tid, el.dataset.tact);
+  if ((el = target.closest('[data-tstart]'))) { e.preventDefault(); return startTimer(Number(el.dataset.tstart), el.dataset.tlabel || t('Timer')); }
+  if ((el = target.closest('[data-tact]'))) return timerAction(el.closest('[data-tid]').dataset.tid, el.dataset.tact);
   if (!state.cook) return;
-  if (t.closest('[data-cookclose]')) return closeCook();
-  if (t.closest('[data-cooknext]')) return cookGo(1);
-  if (t.closest('[data-cookprev]')) return cookGo(-1);
-  if ((el = t.closest('[data-cookcheck]'))) {
+  if (target.closest('[data-cookclose]')) return closeCook();
+  if (target.closest('[data-cooknext]')) return cookGo(1);
+  if (target.closest('[data-cookprev]')) return cookGo(-1);
+  if ((el = target.closest('[data-cookcheck]'))) {
     const k = Number(el.dataset.cookcheck);
     if (el.checked) state.cook.checked.add(k); else state.cook.checked.delete(k);
     return;
   }
-  if ((el = t.closest('[data-cookrate]'))) {
+  if ((el = target.closest('[data-cookrate]'))) {
     const n = Number(el.dataset.cookrate);
     $$('[data-cookrate]').forEach((b) => b.classList.toggle('on', Number(b.dataset.cookrate) <= n));
     try {
       Object.assign(state.cook.r, Kit.normalizeRecipe(await api.update(state.cook.r.id, { rating: n })));
-      toast('Rating saved');
+      toast(t('Rating saved'));
     } catch (err) { toast(err.message); }
   }
 });
@@ -1136,7 +1175,144 @@ document.addEventListener('touchend', (e) => {
 loadTimers();
 renderTimers();
 if (timers.some((t) => !t.paused && !t.done)) tick();
-api.config().then((c) => { state.ai = Boolean(c.ai); if (location.pathname === '/new' || location.pathname.endsWith('/edit')) render(); }).catch(() => {});
+
+
+// ---------- Languages ----------
+
+const langName = (code) => languageName(code);
+const nativeName = (code) => Kit.LANGUAGES[code]?.name || code;
+const starLabel = (n) => (n === 1 ? t('1 star') : t('{n} stars', { n }));
+const recipeLang = (r) => r.lang || Kit.detectLang(r);
+
+// Banner on a recipe: translated from X (show/restore original), or offer to translate.
+function translationBanner(r) {
+  const target = getLang();
+  if (r.original) {
+    const from = r.original.lang ? langName(r.original.lang) : t('another language');
+    return `<div class="lang-note">
+      <span>🌐 ${state.showOriginal ? esc(t('Showing the original ({lang})', { lang: from })) : esc(t('Translated from {lang}', { lang: from }))}</span>
+      <span class="row wrap">
+        <button class="btn small" data-show-original>${state.showOriginal ? t('Show translation') : t('Show original')}</button>
+        <button class="btn ghost small" data-restore-original>${t('Restore original')}</button>
+      </span></div>`;
+  }
+  const lang = recipeLang(r);
+  if (!lang || lang === target) return '';
+  return `<div class="lang-note">
+    <span>🌐 ${esc(t('This recipe is in {lang}.', { lang: langName(lang) }))}</span>
+    ${state.ai ? `<button class="btn small primary" data-translate-now>${esc(t('Translate into {lang}', { lang: langName(target) }))}</button>`
+      : `<a href="/settings" data-link class="small">${t('How to turn on translation')}</a>`}
+  </div>`;
+}
+
+// After saving: translate into the chosen language if that's switched on.
+async function autoTranslate(recipe, btn) {
+  const target = state.settings.language;
+  if (!state.ai || !state.settings.autoTranslate || !target) return;
+  const lang = recipeLang(recipe);
+  if (!lang || lang === target) return;
+  if (btn) btn.innerHTML = `<span class="spinner"></span>${t('Translating into {lang}…', { lang: langName(target) })}`;
+  try {
+    await api.translate(recipe.id, target);
+  } catch (err) {
+    toast(t('Saved, but not translated: {error}', { error: err.message }));
+  }
+}
+
+async function renderSettings() {
+  document.title = `${t('Language & settings')} · Recipe Box`;
+  const all = await api.list({});
+  if (location.pathname !== '/settings') return;
+  const target = getLang();
+  const todo = all.filter((r) => { const l = recipeLang(r); return l && l !== target; });
+  const unknown = all.filter((r) => !recipeLang(r)).length;
+  view.innerHTML = `
+    <section class="settings">
+      <a href="/" class="back" data-link>← ${t('All recipes')}</a>
+      <h1>${t('Language & settings')}</h1>
+
+      <fieldset class="lang-pick">
+        <legend>${t('Language')}</legend>
+        <p class="muted">${t('The app is shown in this language, and recipes can be translated into it.')}</p>
+        <div class="lang-grid">
+          ${LANG_CODES.map((code) => `<label class="lang-option${code === target ? ' on' : ''}">
+            <input type="radio" name="lang" value="${code}" ${code === target ? 'checked' : ''}>
+            <span>${esc(nativeName(code))}</span></label>`).join('')}
+        </div>
+      </fieldset>
+
+      <section class="card-box">
+        <h2>${t('Translate recipes')}</h2>
+        ${state.ai ? `
+          <label class="check"><input type="checkbox" id="auto-tr" ${state.settings.autoTranslate ? 'checked' : ''}>
+            <span>${esc(t('Translate new recipes into {lang} automatically when they are saved', { lang: langName(target) }))}</span></label>
+          <p>${todo.length
+            ? esc(todo.length === 1 ? t('1 recipe is in another language.') : t('{n} recipes are in another language.', { n: todo.length }))
+            : esc(t('All your recipes are in {lang}.', { lang: langName(target) }))}
+            ${unknown ? `<span class="muted">${esc(unknown === 1 ? t('For 1 recipe the language isn’t clear (for example only a photo); it is left as it is.') : t('For {n} recipes the language isn’t clear (for example only a photo); they are left as they are.', { n: unknown }))}</span>` : ''}</p>
+          ${todo.length ? `<button class="btn primary" id="translate-all">${esc(t('Translate {n} into {lang}', { n: todo.length, lang: langName(target) }))}</button>` : ''}
+          <div id="tr-progress" class="tr-progress" hidden><div class="bar"><span></span></div><p class="muted" id="tr-status"></p></div>
+          <p class="muted small">${t('The original text of every recipe is kept. Open a recipe and choose “Show original” or “Restore original” to see or get it back.')}</p>`
+        : `
+          <p>${t('Translating recipes uses Claude, which needs an Anthropic API key.')}</p>
+          <ol class="steps-plain">
+            <li>${t('Get a key at console.anthropic.com (each translation costs about 1–3 cents).')}</li>
+            <li>${t('Stop the app in the terminal with Ctrl + C.')}</li>
+            <li>${t('Start it again with your key:')}<pre>ANTHROPIC_API_KEY=sk-ant-... npm start</pre></li>
+          </ol>
+          <p class="muted small">${t('The app texts change language without a key.')}</p>`}
+      </section>
+    </section>`;
+
+  view.onchange = async (e) => {
+    if (e.target.name === 'lang') {
+      await chooseLanguage(e.target.value);
+      return renderSettings();
+    }
+    if (e.target.id === 'auto-tr') {
+      state.settings = await api.saveSettings({ autoTranslate: e.target.checked });
+      toast(e.target.checked ? t('New recipes will be translated automatically') : t('New recipes stay in their own language'));
+    }
+  };
+  view.onclick = async (e) => {
+    const btn = e.target.closest('#translate-all');
+    if (!btn) return;
+    btn.disabled = true;
+    const box = $('#tr-progress');
+    const bar = $('.bar span', box);
+    const status = $('#tr-status');
+    box.hidden = false;
+    const failed = [];
+    for (let i = 0; i < todo.length; i++) {
+      status.textContent = t('Translating {n} of {total}: {title}', { n: i + 1, total: todo.length, title: todo[i].title });
+      bar.style.width = `${Math.round((i / todo.length) * 100)}%`;
+      try {
+        await api.translate(todo[i].id, target);
+      } catch (err) {
+        failed.push(`${todo[i].title}: ${err.message}`);
+        // A missing or rejected key fails every recipe the same way; stop early.
+        if (/API key|not set up|Anthropic/i.test(err.message)) break;
+      }
+    }
+    bar.style.width = '100%';
+    const ok = todo.length - failed.length;
+    toast(ok === 1 ? t('1 recipe translated') : t('{n} recipes translated', { n: ok }));
+    await renderSettings();
+    if (failed.length) {
+      $('.card-box').insertAdjacentHTML('beforeend', `<div class="lang-note error"><strong>${esc(t('Not translated:'))}</strong><ul>${failed.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></div>`);
+    }
+  };
+}
+
+async function chooseLanguage(code) {
+  setLang(code);
+  applyStaticTexts();
+  try {
+    state.settings = await api.saveSettings({ language: code });
+  } catch (err) {
+    toast(err.message);
+  }
+}
 
 // ---------- Menu & backups ----------
 
@@ -1155,9 +1331,9 @@ $('#import-backup-input').addEventListener('change', async (e) => {
   menu.hidden = true;
   if (!file) return;
   try {
-    toast('Restoring backup…');
+    toast(t('Restoring backup…'));
     const { imported } = await api.importBackup(await file.text());
-    toast(`Restored ${imported} recipe${imported === 1 ? '' : 's'}`);
+    toast(imported === 1 ? t('Restored 1 recipe') : t('Restored {n} recipes', { n: imported }));
     navigate('/');
   } catch (err) {
     toast(err.message);
@@ -1182,4 +1358,18 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
-render();
+// Start: pick up the saved language (or the browser's, the first time) before drawing anything.
+(async function boot() {
+  applyStaticTexts();
+  const [settings, config] = await Promise.all([api.settings().catch(() => null), api.config().catch(() => null)]);
+  state.ai = Boolean(config?.ai);
+  if (settings) state.settings = settings;
+  if (settings && !settings.language) {
+    const browser = (navigator.languages || [navigator.language || 'en']).map((l) => String(l).slice(0, 2).toLowerCase());
+    await chooseLanguage(browser.find((l) => LANG_CODES.includes(l)) || 'en');
+  } else if (settings?.language && settings.language !== getLang()) {
+    setLang(settings.language);
+    applyStaticTexts();
+  }
+  render();
+})();

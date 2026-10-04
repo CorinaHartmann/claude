@@ -12,7 +12,7 @@ const path = require('path');
 const { Store } = require('./lib/store');
 const importer = require('./lib/importer');
 const ai = require('./lib/ai');
-const { normalizeRecipe } = require('./public/recipe-kit');
+const { normalizeRecipe, detectLang, LANGUAGES } = require('./public/recipe-kit');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_UPLOAD = 200 * 1024 * 1024;
@@ -90,7 +90,7 @@ async function readJson(req, limit = MAX_JSON) {
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   // Client-side routes all load the app shell.
-  if (rel === '/' || rel === '/share' || rel.startsWith('/recipe/') || rel === '/new') rel = '/index.html';
+  if (rel === '/' || rel === '/share' || rel.startsWith('/recipe/') || rel === '/new' || rel === '/settings') rel = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 403, 'Forbidden');
   fs.stat(file, (err, stat) => {
@@ -172,6 +172,23 @@ async function handleApi(req, res, store, url) {
       if (method === 'DELETE') {
         return (await store.remove(id)) ? send(res, 204, '') : send(res, 404, { error: 'Recipe not found' });
       }
+    } else if (sub === 'translate' && method === 'POST') {
+      const recipe = store.get(id);
+      if (!recipe) return send(res, 404, { error: 'Recipe not found' });
+      const { to } = await readJson(req);
+      if (!LANGUAGES[to]) throw new HttpError(400, 'Unknown language');
+      // Nothing to do when we already know it's in that language.
+      if ((recipe.lang || detectLang(recipe)) === to) {
+        return send(res, 200, recipe.lang === to ? recipe : await store.update(id, { lang: to }));
+      }
+      const result = await ai.translateRecipe(recipe, to);
+      const from = LANGUAGES[result.sourceLanguage] ? result.sourceLanguage : null;
+      if (from === to) return send(res, 200, await store.update(id, { lang: to }));
+      const { sourceLanguage, ...fields } = result;
+      return send(res, 200, await store.applyTranslation(id, fields, { from, to }));
+    } else if (sub === 'original' && method === 'POST') {
+      const restored = await store.restoreOriginal(id);
+      return restored ? send(res, 200, restored) : send(res, 404, { error: 'This recipe has no original to go back to' });
     } else if (sub === 'files') {
       if (!fileId && method === 'POST') {
         if (!store.get(id)) return send(res, 404, { error: 'Recipe not found' });
@@ -193,6 +210,11 @@ async function handleApi(req, res, store, url) {
   if (parts[0] === 'tags' && method === 'GET') return send(res, 200, store.tags());
 
   if (parts[0] === 'config' && method === 'GET') return send(res, 200, { ai: ai.isEnabled() });
+
+  if (parts[0] === 'settings') {
+    if (method === 'GET') return send(res, 200, store.getSettings());
+    if (method === 'PUT') return send(res, 200, await store.updateSettings(await readJson(req)));
+  }
 
   if (parts[0] === 'ai' && parts[1] === 'extract' && method === 'POST') {
     const body = await readJson(req, MAX_AI);

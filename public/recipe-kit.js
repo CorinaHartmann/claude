@@ -263,9 +263,44 @@ function fmtClock(ms) {
 }
 
 
+// ---------- Languages ----------
+const LANGUAGES = {
+  de: { name: 'Deutsch', english: 'German' },
+  en: { name: 'English', english: 'English' },
+  fr: { name: 'Français', english: 'French' },
+  it: { name: 'Italiano', english: 'Italian' },
+  es: { name: 'Español', english: 'Spanish' },
+  nl: { name: 'Nederlands', english: 'Dutch' },
+};
+
+// Words that are common in recipes and (mostly) belong to one language.
+const LANG_WORDS = {
+  de: 'und mit für den dem der das die ein eine einen auf aus bis etwas mehl zucker eier ei butter milch salz pfeffer backen ofen minuten minute stunde std teig schüssel geben rühren verrühren hinzufügen vorheizen el tl prise zwiebel knoblauch sahne öl wasser etwa ca dann darauf danach lassen',
+  en: 'and with the for of into until then flour sugar eggs egg butter milk salt pepper bake oven minutes minute hour bowl add stir mix preheat cup cups tbsp tsp pinch onion garlic cream oil water about let over',
+  fr: 'et avec les des une pour dans puis farine sucre oeufs œufs oeuf beurre lait sel poivre cuire four minutes bol ajouter mélanger préchauffer cuillère pincée oignon ail crème huile eau environ laisser jusqu',
+  it: 'e con il gli della dello delle per nel nella poi farina zucchero uova uovo burro latte sale pepe cuocere forno minuti ciotola aggiungere mescolare preriscaldare cucchiaio cucchiaini pizzico cipolla aglio panna olio acqua circa lasciare fino',
+  es: 'y con los las del una para en luego harina azúcar huevos huevo mantequilla leche sal pimienta hornear horno minutos bol añadir mezclar precalentar cucharada cucharadita pizca cebolla ajo nata aceite agua aproximadamente dejar hasta',
+  nl: 'en met het een voor van tot dan bloem suiker eieren ei boter melk zout peper bakken oven minuten kom toevoegen roeren mengen voorverwarmen eetlepel theelepel snufje ui knoflook room olie water ongeveer laten',
+};
+const LANG_SETS = Object.fromEntries(Object.entries(LANG_WORDS).map(([k, v]) => [k, new Set(v.split(' '))]));
+
+// Best guess at the language of a recipe's text, or null when unsure.
+function detectLang(r) {
+  const text = [r.title, r.description, ...(r.ingredients || []), ...(r.instructions || []), r.notes].join(' ').toLowerCase();
+  const words = text.match(/\p{L}+/gu) || [];
+  if (words.length < 3) return null;
+  const score = {};
+  for (const w of words) for (const [k, set] of Object.entries(LANG_SETS)) if (set.has(w)) score[k] = (score[k] || 0) + 1;
+  const ranked = Object.entries(score).sort((a, b) => b[1] - a[1]);
+  if (!ranked.length || ranked[0][1] < 2) return null;
+  if (ranked[1] && ranked[1][1] * 1.3 > ranked[0][1]) return null;
+  return ranked[0][0];
+}
+
 return {
   QTY, toNum, fmtQty, niceAmount, scaleIngredient, cleanTags,
   normIngredient, normStep, normTime, normServings, parseServings, servingsUnit, normTitle, normalizeRecipe,
   findDurations, fmtDur, fmtClock,
+  LANGUAGES, detectLang,
 };
 });

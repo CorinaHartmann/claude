@@ -147,3 +147,11 @@ test('parseText keeps "Cook ..." steps as steps', () => {
   assert.strictEqual(d.servings, '2');
   assert.deepStrictEqual(d.instructions, ['Cook the pasta', 'Cook 10 min more']);
 });
+
+test('parseText finds servings and times in other languages', () => {
+  const de = parseText('Brownies\nErgibt: 12 Stück\nZubereitungszeit: 15 Min.\nBackzeit: 25 Min.\nZutaten\n200 g Mehl\nFür den Teig:\n2 Eier\nZubereitung\nBacken.');
+  assert.deepStrictEqual([de.servings, de.prepTime, de.cookTime], ['12 Stück', '15 Min.', '25 Min.']);
+  assert.deepStrictEqual(de.ingredients, ['200 g Mehl', '## Für den Teig', '2 Eier']);
+  const fr = parseText('Crêpes\nPour 4 personnes\nCuisson : 20 min\nIngrédients\n250 g de farine\nPréparation\nMélanger.');
+  assert.deepStrictEqual([fr.servings, fr.cookTime, fr.instructions[0]], ['4 personnes', '20 min', 'Mélanger.']);
+});
