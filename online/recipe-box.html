@@ -181,12 +181,48 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 .hint { color: var(--muted); font-size: 14px; margin: 0; }
 .err { color: var(--danger); font-size: 14px; }
 
-.toast { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 30; max-width: calc(100% - 32px); text-align: center; }
+.toast { position: fixed; left: 50%; top: calc(12px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; z-index: 30; max-width: calc(100% - 32px); text-align: center; }
 .spin { width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: sp .7s linear infinite; }
 @keyframes sp { to { transform: rotate(360deg); } }
 .muted { color: var(--muted); }
 .ex { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--tomato); }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2s; } }
+
+/* Cooking mode */
+.cook-start { width: 100%; padding: 14px; font-size: 17px; border-radius: 14px; }
+.cook { position: fixed; inset: 0; z-index: 25; background: var(--bg); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.cook-top { display: flex; align-items: center; gap: 10px; padding: 10px 16px; }
+.cook-title { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cook-count { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cook-progress { height: 4px; background: var(--surface-2); margin-inline: 16px; border-radius: 4px; overflow: hidden; }
+.cook-progress span { display: block; height: 100%; background: var(--accent); transition: width .25s ease; }
+.cook-body { flex: 1; overflow-y: auto; padding: 22px 16px; display: flex; flex-direction: column; gap: 18px; max-width: 760px; width: 100%; margin: 0 auto; touch-action: pan-y; }
+.cook-section { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+.cook-step { font-size: clamp(22px, 5.6vw, 34px); line-height: 1.4; font-weight: 500; margin: 0; overflow-wrap: anywhere; }
+.cook-big { font-family: var(--font-display); font-size: clamp(30px, 8vw, 46px); font-weight: 800; margin: 0; }
+.cook-timers { display: flex; flex-wrap: wrap; gap: 10px; }
+.cook-timers .btn { font-size: 17px; padding: 12px 18px; border-radius: 999px; }
+.cook-nav { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); max-width: 760px; width: 100%; margin: 0 auto; }
+.cook-nav .btn { flex: 1; padding: 16px; font-size: 18px; border-radius: 14px; }
+.cook .ing label { font-size: 19px; }
+.cook details { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: var(--surface); }
+.cook summary { cursor: pointer; font-weight: 600; }
+.tchip { display: inline; font: inherit; color: var(--accent); background: var(--accent-soft); border: 0; border-radius: 6px; padding: 0 5px; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+/* Timers */
+.tray { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px 0; }
+.tray:empty { display: none; }
+.timer { display: flex; align-items: center; gap: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 4px 4px 12px; box-shadow: var(--shadow); max-width: 100%; }
+.timer .tt { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 18px; font-family: var(--font-display); }
+.timer .tl { font-size: 12px; color: var(--muted); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timer .btn { padding: 5px 9px; font-size: 13px; border-radius: 999px; }
+.timer.paused .tt { color: var(--muted); }
+.timer.done { background: var(--tomato); border-color: var(--tomato); color: #fff; animation: ring 1s ease-in-out infinite; }
+.timer.done .tl { color: #fff; }
+.timer.done .btn { background: #fff; color: var(--tomato); border-color: #fff; }
+@keyframes ring { 50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--tomato) 30%, transparent); } }
+#timer-float { position: fixed; left: 0; right: 0; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 7; justify-content: center; padding: 0 16px; pointer-events: none; }
+#timer-float .timer { pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { .timer.done { animation: none; } .cook-progress span { transition: none; } }
 </style>
 
 <div class="wrap" id="app">
@@ -195,6 +231,8 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 <button class="btn primary fab" id="fab" hidden>＋ Add recipe</button>
 <div id="overlay"></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div id="timer-float" class="tray" data-timer-tray aria-live="polite"></div>
+<div id="cook-root"></div>
 
 <script>
 'use strict';
@@ -237,6 +275,7 @@ const state = {
   q: '', tag: '', fav: false,
   view: { name: 'list' },
   draft: null, pending: [],
+  cook: null,
 };
 
 // ---------- Plain-text recipe parser ----------
@@ -726,6 +765,7 @@ function renderDetail(r) {
       ${facts.length ? `<div class="facts">${facts.map(([k, v]) => `<div class="fact"><small>${k}</small>${esc(v)}</div>`).join('')}</div>` : ''}
       ${r.videoUrl ? `<a class="linkcard" href="${esc(r.videoUrl)}" target="_blank" rel="noopener"><span class="play" aria-hidden="true">▶</span><span style="min-width:0"><strong>Watch the video</strong><small>${esc(hostOf(r.videoUrl))}</small></span></a>` : ''}
       ${r.sourceUrl && r.sourceUrl !== r.videoUrl ? `<a class="linkcard" href="${esc(r.sourceUrl)}" target="_blank" rel="noopener"><span class="play" aria-hidden="true">↗</span><span style="min-width:0"><strong>Open the original recipe</strong><small>${esc(hostOf(r.sourceUrl))}</small></span></a>` : ''}
+      ${steps.some((l) => !l.startsWith('## ')) ? '<button class="btn primary cook-start" data-cook>▶ Start cooking</button>' : ''}
       ${ing.length || steps.length ? `
       <div class="cols">
         <section>
@@ -736,7 +776,7 @@ function renderDetail(r) {
         </section>
         <section>
           <div class="sec-head"><h2>Steps</h2></div>
-          ${steps.length ? `<ol class="steps">${steps.map((l, i) => l.startsWith('## ') ? `<li class="group">${esc(l.slice(3))}</li>` : `<li class="step${done.has(i) ? ' done' : ''}" data-step="${i}">${esc(l)}</li>`).join('')}</ol>` : '<p class="muted">None listed.</p>'}
+          ${steps.length ? `<ol class="steps">${steps.map((l, i) => l.startsWith('## ') ? `<li class="group">${esc(l.slice(3))}</li>` : `<li class="step${done.has(i) ? ' done' : ''}" data-step="${i}">${stepWithTimers(l, `Step ${steps.slice(0, i + 1).filter((x) => !x.startsWith('## ')).length} · ${r.title}`)}</li>`).join('')}</ol>` : '<p class="muted">None listed.</p>'}
         </section>
       </div>` : ''}
       ${r.notes ? `<div class="notes"><strong>Notes</strong>\n${esc(r.notes)}</div>` : ''}
@@ -1213,12 +1253,256 @@ async function importPastedText(text, btn) {
   startDraft({ ...parseText(text), ...links, sourceType: 'text' });
 }
 
+// ---------- Timers ----------
+// Durations in step text: "15 minutes", "20–25 Min.", "1 Std. 30 Min.", "eine halbe Stunde".
+const DNUM = '(\\d+(?:[.,]\\d+)?|½|¼|¾)';
+const DUNIT = '(stunden|stunde|std\\.?|hours?|hrs?|h|minuten|minutes?|mins?|min\\.?|sekunden|sek\\.?|seconds?|secs?)';
+const DUR_RE = new RegExp(`${DNUM}(?:\\s*(?:-|–|bis|to|or|oder)\\s*${DNUM})?\\s*${DUNIT}(?![\\p{L}])`, 'giu');
+const HALF_HOUR = /(half an hour|(?:eine[rn]?\s+)?halben?\s+stunde)/giu;
+const unitSecs = (u) => (/^(st|h)/i.test(u) ? 3600 : /^(se|sek)/i.test(u) ? 1 : 60);
+const dnum = (x) => FR[x] ?? parseFloat(String(x).replace(',', '.'));
+
+function findDurations(text) {
+  const out = [];
+  let m;
+  DUR_RE.lastIndex = 0;
+  while ((m = DUR_RE.exec(text))) {
+    const k = unitSecs(m[3]);
+    out.push({ start: m.index, end: m.index + m[0].length, secs: Math.round(dnum(m[1]) * k), max: m[2] ? Math.round(dnum(m[2]) * k) : 0, unit: k });
+  }
+  HALF_HOUR.lastIndex = 0;
+  while ((m = HALF_HOUR.exec(text))) out.push({ start: m.index, end: m.index + m[0].length, secs: 1800, max: 0, unit: 60 });
+  out.sort((a, b) => a.start - b.start);
+  // "1 Std. 30 Min." / "1 hour and 30 minutes" -> one duration
+  const merged = [];
+  for (const d of out) {
+    const prev = merged[merged.length - 1];
+    if (prev && !prev.max && !d.max && prev.unit > d.unit && /^\s*(,|and|und)?\s*$/i.test(text.slice(prev.end, d.start))) {
+      prev.end = d.end; prev.secs += d.secs; prev.unit = d.unit;
+    } else merged.push({ ...d });
+  }
+  return merged.filter((d) => d.secs >= 5 && d.secs <= 48 * 3600);
+}
+
+function fmtDur(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return `${h} h${m ? ` ${m} min` : ''}`;
+  if (m) return `${m} min${s ? ` ${s} s` : ''}`;
+  return `${s} s`;
+}
+function fmtClock(ms) {
+  const t = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+// Step text with each duration as a tappable "start timer" chip.
+function stepWithTimers(text, label) {
+  const ds = findDurations(text);
+  let html = '', at = 0;
+  for (const d of ds) {
+    html += esc(text.slice(at, d.start));
+    html += `<button class="tchip" data-tstart="${d.secs}" data-tlabel="${esc(label)}" title="Start a ${esc(fmtDur(d.secs))} timer">${esc(text.slice(d.start, d.end))} ⏱</button>`;
+    at = d.end;
+  }
+  return html + esc(text.slice(at));
+}
+
+let timers = [];
+let tickHandle = null, ringHandle = null, actx = null;
+const loadTimers = () => { try { timers = JSON.parse(localStorage.getItem('rb-timers') || '[]').filter((t) => t && t.id); } catch { timers = []; } };
+const saveTimers = () => { try { localStorage.setItem('rb-timers', JSON.stringify(timers)); } catch { /* private mode */ } };
+const left = (t) => (t.paused ? t.remaining : t.end - Date.now());
+
+function ensureAudio() {
+  try {
+    actx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+  } catch { actx = null; }
+}
+function beep() {
+  if (!actx) return;
+  try {
+    const t0 = actx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.value = i === 2 ? 1175 : 880;
+      g.gain.setValueAtTime(0.0001, t0 + i * 0.3);
+      g.gain.exponentialRampToValueAtTime(0.35, t0 + i * 0.3 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.3 + 0.25);
+      o.connect(g).connect(actx.destination);
+      o.start(t0 + i * 0.3); o.stop(t0 + i * 0.3 + 0.27);
+    }
+  } catch { /* audio not allowed */ }
+}
+
+function startTimer(secs, label) {
+  ensureAudio();
+  timers.push({ id: Math.random().toString(36).slice(2), label, total: secs * 1000, end: Date.now() + secs * 1000, paused: false, remaining: 0, done: false });
+  saveTimers();
+  renderTimers();
+  toast(`Timer started: ${fmtDur(secs)}`);
+}
+
+function timerAction(id, act) {
+  const t = timers.find((x) => x.id === id);
+  if (!t) return;
+  ensureAudio();
+  if (act === 'pause') { if (t.paused) { t.end = Date.now() + t.remaining; t.paused = false; } else { t.remaining = t.end - Date.now(); t.paused = true; } }
+  if (act === 'add') { if (t.done) { t.done = false; t.paused = false; t.end = Date.now() + 60000; } else if (t.paused) t.remaining += 60000; else t.end += 60000; }
+  if (act === 'cancel') timers = timers.filter((x) => x !== t);
+  saveTimers();
+  renderTimers();
+}
+
+function renderTimers() {
+  const html = timers.map((t) => `
+    <div class="timer${t.paused ? ' paused' : ''}${t.done ? ' done' : ''}" data-tid="${t.id}">
+      <span style="display:grid;line-height:1.1;min-width:0"><span class="tt">${t.done ? 'Done!' : fmtClock(left(t))}</span><span class="tl">${esc(t.label)}</span></span>
+      ${t.done ? '' : `<button class="btn" data-tact="pause" aria-label="${t.paused ? 'Resume' : 'Pause'} timer">${t.paused ? '▶' : '❚❚'}</button>`}
+      <button class="btn" data-tact="add" aria-label="Add one minute">+1 min</button>
+      <button class="btn" data-tact="cancel" aria-label="${t.done ? 'Dismiss' : 'Cancel'} timer">${t.done ? 'OK' : '✕'}</button>
+    </div>`).join('');
+  document.querySelectorAll('[data-timer-tray]').forEach((tray) => { tray.innerHTML = html; });
+  $('#timer-float').hidden = !timers.length || !!state.cook;
+  const running = timers.some((t) => !t.paused && !t.done);
+  if (running && !tickHandle) tickHandle = setInterval(tick, 250);
+  if (!running && tickHandle) { clearInterval(tickHandle); tickHandle = null; }
+  const ringing = timers.some((t) => t.done);
+  if (ringing && !ringHandle) { beep(); try { navigator.vibrate?.([400, 200, 400]); } catch { /* not allowed */ } ringHandle = setInterval(() => { beep(); try { navigator.vibrate?.([400, 200, 400]); } catch { /* */ } }, 1600); }
+  if (!ringing && ringHandle) { clearInterval(ringHandle); ringHandle = null; }
+}
+
+function tick() {
+  let changed = false;
+  for (const t of timers) {
+    if (!t.paused && !t.done && t.end <= Date.now()) { t.done = true; changed = true; }
+  }
+  if (changed) { saveTimers(); renderTimers(); return; }
+  // Only update the numbers, so buttons aren't replaced under a finger.
+  document.querySelectorAll('.timer[data-tid]').forEach((el) => {
+    const t = timers.find((x) => x.id === el.dataset.tid);
+    if (t && !t.done) el.querySelector('.tt').textContent = fmtClock(left(t));
+  });
+}
+
+// ---------- Cooking mode ----------
+let wakeLock = null;
+async function keepAwake() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => { if (state.cook && document.visibilityState === 'visible') keepAwake(); if (document.visibilityState === 'visible') tick(); });
+
+function cookPages(r) {
+  const pages = [];
+  if ((r.ingredients || []).length) pages.push({ kind: 'ing' });
+  let section = '', n = 0;
+  for (const line of r.instructions || []) {
+    if (line.startsWith('## ')) { section = line.slice(3); continue; }
+    pages.push({ kind: 'step', text: line, section, n: ++n });
+  }
+  pages.push({ kind: 'done' });
+  return { pages, steps: n };
+}
+
+function openCook(r) {
+  state.cook = { id: r.id, page: 0 };
+  ensureAudio();
+  keepAwake();
+  renderCook();
+}
+function closeCook() {
+  state.cook = null;
+  $('#cook-root').innerHTML = '';
+  try { wakeLock?.release(); } catch { /* */ }
+  wakeLock = null;
+  renderTimers();
+}
+
+const cookChecked = new Set();
+function renderCook() {
+  const r = state.recipes.find((x) => x.id === state.cook?.id);
+  if (!r) return closeCook();
+  const { pages, steps } = cookPages(r);
+  const i = Math.max(0, Math.min(state.cook.page, pages.length - 1));
+  state.cook.page = i;
+  const pg = pages[i];
+  const ingList = (r.ingredients || []).map((l, k) => l.startsWith('## ') ? `<li class="group">${esc(l.slice(3))}</li>`
+    : `<li><label><input type="checkbox" data-cookcheck="${k}"${cookChecked.has(`${r.id}:${k}`) ? ' checked' : ''}><span>${ingredientHtml(l, detailFactor)}</span></label></li>`).join('');
+  const label = (n) => `Step ${n} · ${r.title}`;
+  let body = '';
+  if (pg.kind === 'ing') {
+    body = `<p class="cook-section">Get ready${detailFactor !== 1 ? ` · ${detailFactor === 0.5 ? '½' : detailFactor}× amounts` : ''}</p>
+      <h2 class="cook-big">Ingredients</h2><ul class="ing">${ingList}</ul>`;
+  } else if (pg.kind === 'step') {
+    const ds = findDurations(pg.text);
+    body = `${pg.section ? `<p class="cook-section">${esc(pg.section)}</p>` : `<p class="cook-section">Step ${pg.n}</p>`}
+      <p class="cook-step">${stepWithTimers(pg.text, label(pg.n))}</p>
+      ${ds.length ? `<div class="cook-timers">${ds.map((d) => `<button class="btn primary" data-tstart="${d.secs}" data-tlabel="${esc(label(pg.n))}">⏱ Start ${esc(fmtDur(d.secs))} timer</button>${d.max ? `<button class="btn" data-tstart="${d.max}" data-tlabel="${esc(label(pg.n))}">⏱ ${esc(fmtDur(d.max))}</button>` : ''}`).join('')}</div>` : ''}
+      ${ingList ? `<details><summary>Show ingredients</summary><ul class="ing">${ingList}</ul></details>` : ''}`;
+  } else {
+    body = `<div style="text-align:center;display:grid;gap:14px;justify-items:center;margin-top:8vh">
+      <div style="font-size:64px" aria-hidden="true">🍽️</div><h2 class="cook-big">Enjoy your meal!</h2>
+      <p class="muted">How did it turn out?</p>
+      <div class="stars" role="group" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button data-cookrate="${n}" class="${n <= (r.rating || 0) ? 'on' : ''}" aria-label="${n} star${n > 1 ? 's' : ''}" style="font-size:36px">★</button>`).join('')}</div></div>`;
+  }
+  const stepNo = pg.kind === 'step' ? pg.n : pg.kind === 'ing' ? 0 : steps;
+  $('#cook-root').innerHTML = `
+    <div class="cook" role="dialog" aria-modal="true" aria-label="Cooking ${esc(r.title)}">
+      <div class="cook-top">
+        <button class="btn" data-cookclose>✕ Close</button>
+        <div class="cook-title">${esc(r.title)}</div>
+        <span class="cook-count">${pg.kind === 'ing' ? 'Ingredients' : pg.kind === 'done' ? 'Finished' : `Step ${pg.n} of ${steps}`}</span>
+      </div>
+      <div class="cook-progress" aria-hidden="true"><span style="width:${steps ? Math.round((stepNo / steps) * 100) : 100}%"></span></div>
+      <div class="tray" data-timer-tray aria-live="polite"></div>
+      <div class="cook-body" id="cook-body">${body}</div>
+      <div class="cook-nav">
+        <button class="btn" data-cookprev ${i === 0 ? 'disabled style="visibility:hidden"' : ''}>← Back</button>
+        ${pg.kind === 'done' ? '<button class="btn primary" data-cookclose>Close</button>' : `<button class="btn primary" data-cooknext>${i === pages.length - 2 ? 'Finish' : 'Next'} →</button>`}
+      </div>
+    </div>`;
+  renderTimers();
+  $('#cook-body').scrollTop = 0;
+}
+function cookGo(delta) {
+  if (!state.cook) return;
+  state.cook.page += delta;
+  renderCook();
+}
+
+// Swipe between steps.
+let touchX = null, touchY = null;
+document.addEventListener('touchstart', (e) => { if (!state.cook || !e.target.closest('.cook-body')) return; touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
+document.addEventListener('touchend', (e) => {
+  if (!state.cook || touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX, dy = e.changedTouches[0].clientY - touchY;
+  touchX = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) cookGo(dx < 0 ? 1 : -1);
+}, { passive: true });
+
 // ---------- Events ----------
 document.addEventListener('click', async (e) => {
   const t = e.target;
   const on = (sel) => t.closest(sel);
   let el;
 
+  if ((el = on('[data-tstart]'))) { e.preventDefault(); return startTimer(Number(el.dataset.tstart), el.dataset.tlabel || 'Timer'); }
+  if ((el = on('[data-tact]'))) return timerAction(el.closest('[data-tid]').dataset.tid, el.dataset.tact);
+  if (state.cook) {
+    if (on('[data-cookclose]')) return closeCook();
+    if (on('[data-cooknext]')) return cookGo(1);
+    if (on('[data-cookprev]')) return cookGo(-1);
+    if ((el = on('[data-cookrate]'))) {
+      const n = Number(el.dataset.cookrate);
+      document.querySelectorAll('[data-cookrate]').forEach((b) => b.classList.toggle('on', Number(b.dataset.cookrate) <= n));
+      await patch(state.cook.id, { rating: n }); toast('Rating saved'); return;
+    }
+    if ((el = on('[data-cookcheck]'))) { const k = `${state.cook.id}:${el.dataset.cookcheck}`; if (el.checked) cookChecked.add(k); else cookChecked.delete(k); return; }
+    return;
+  }
+  if (on('[data-cook]')) { const r = state.recipes.find((x) => x.id === state.view.id); return r && openCook(r); }
   if (on('[data-add]') || on('#fab')) return openAdd();
   if ((el = on('[data-panel]')) && el.tagName === 'BUTTON') { e.preventDefault(); return openAdd(el.dataset.panel); }
   if (on('[data-close]') || t.matches?.('[data-closebg]')) return closeSheet();
@@ -1331,7 +1615,15 @@ document.addEventListener('input', (e) => {
   clearTimeout(qTimer);
   qTimer = setTimeout(() => { state.q = e.target.value.trim(); render(); }, 150);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && overlay.innerHTML) closeSheet(); });
+document.addEventListener('keydown', (e) => {
+  if (state.cook) {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); cookGo(1); }
+    else if (e.key === 'ArrowLeft') cookGo(-1);
+    else if (e.key === 'Escape') closeCook();
+    return;
+  }
+  if (e.key === 'Escape' && overlay.innerHTML) closeSheet();
+});
 
 // Paste a link, text or image anywhere outside a field.
 document.addEventListener('paste', (e) => {
@@ -1350,6 +1642,9 @@ document.addEventListener('paste', (e) => {
 
 // ---------- Boot ----------
 (async function boot() {
+  loadTimers();
+  renderTimers();
+  if (timers.some((t) => !t.paused && !t.done)) tick();
   const use = window.claude?.use?.bind(window.claude);
   if (!use) { state.loaded = true; state.offline = true; return render(); }
   db = await use('db').catch(() => null);
@@ -1359,6 +1654,7 @@ document.addEventListener('paste', (e) => {
       .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
     state.loaded = true;
     render();
+    if (state.cook && !state.recipes.some((x) => x.id === state.cook.id)) closeCook();
   }, () => { state.loaded = true; state.offline = true; render(); });
   assets = await use('assets').catch(() => null);
   sample = await use('sample').catch(() => null);
