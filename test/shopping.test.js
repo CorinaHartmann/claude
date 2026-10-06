@@ -210,3 +210,19 @@ test('postcodes are looked up as postcodes, in the chosen country', async (t) =>
   await assert.rejects(places.geocode('8001', 'de', 'DE'), (err) => err.status === 400 && /5 digits/.test(err.message));
   await assert.rejects(places.geocode('10115', 'de', 'AT'), (err) => err.status === 400 && /4 digits/.test(err.message));
 });
+
+test('supermarkets within 15 km: the big chains are not crowded out by small shops', async (t) => {
+  const realFetch = places.deps.fetch;
+  t.after(() => { places.deps.fetch = realFetch; });
+  let query = '';
+  places.deps.fetch = async (url, opts) => {
+    query = decodeURIComponent(String(opts.body));
+    const small = Array.from({ length: 20 }, (_, i) => ({ type: 'node', lat: 47.37 + i * 0.001, lon: 8.54, tags: { shop: 'supermarket', name: `Dorfladen ${i}` } }));
+    return new Response(JSON.stringify({ elements: [...small, { type: 'node', lat: 47.47, lon: 8.54, tags: { shop: 'supermarket', brand: 'Migros' } }] }));
+  };
+  const stores = await places.nearbySupermarkets({ lat: 47.369, lon: 8.54 });
+  assert.match(query, /around:15000,/);
+  assert.strictEqual(stores.length, 15);
+  const migros = stores.find((s) => s.chain === 'Migros');
+  assert.ok(migros && migros.km > 10, 'Migros 11 km away is listed');
+});

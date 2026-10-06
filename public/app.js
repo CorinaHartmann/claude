@@ -1471,8 +1471,8 @@ async function renderShopping() {
       const box = $('#nearby');
       if (!box) return;
       box.innerHTML = stores.length
-        ? `<p class="muted small">${esc(t('Supermarkets within 3 km:'))}</p><div class="chips">${stores.map((st) => `<span class="badge" title="${esc(st.address || '')}">${esc(st.chain)} · ${km(st.km)}</span>`).join('')}</div>`
-        : `<p class="muted small">${t('No supermarkets found within 3 km.')}</p>`;
+        ? `<p class="muted small">${esc(t('Supermarkets within {km} km:', { km: 15 }))}</p><div class="chips">${stores.map((st) => `<span class="badge" title="${esc(st.address || '')}">${esc(st.chain)} · ${km(st.km)}</span>`).join('')}</div>`
+        : `<p class="muted small">${t('No supermarkets found within {km} km.', { km: 15 })}</p>`;
     }).catch((err) => {
       const box = $('#nearby');
       if (!box) return;
