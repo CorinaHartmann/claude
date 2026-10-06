@@ -85,6 +85,21 @@ $env:ANTHROPIC_API_KEY="sk-ant-..."; npm start
 
 When it's on, the editor shows **✨ Fill in with Claude** and **✨ Read from photos**, and recipes can be translated (see Languages above).
 
+### Instagram
+
+Paste or share an Instagram post or reel link. The app reads the caption (from the
+post's embed page, no login needed), sorts the recipe into ingredients and steps
+(with Claude, if set up), and saves the picture as a file because Instagram's picture
+links expire. If the caption has no recipe, it says why – recipe only in the video,
+"link in bio", or "comment to get it by DM" – and offers to read screenshots instead.
+Instagram has no official API for this and changes its pages now and then; screenshots
+always work.
+
+**From the iPhone:** iOS doesn't let web apps appear in the share menu, so the app
+shows a one-time Shortcuts setup under *Language & settings → Share recipes from your
+iPhone*: a shortcut that opens `http://<computer>:3000/share?url=<shared link>`. After
+that, Instagram → paper plane → Share… → Recipe Box imports the post.
+
 ### Using it on your phone
 
 1. Run the server on a computer that stays on (a desktop, a Raspberry Pi or a small home server).

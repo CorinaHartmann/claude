@@ -16,6 +16,8 @@ const { Store } = require('./lib/store');
 const importer = require('./lib/importer');
 const ai = require('./lib/ai');
 const places = require('./lib/places');
+const instagram = require('./lib/instagram');
+const os = require('os');
 const billing = require('./lib/billing');
 const { Accounts } = require('./lib/accounts');
 const { Credits, PACKS, priceList, config: creditConfig } = require('./lib/credits');
@@ -28,6 +30,13 @@ const MAX_BACKUP = 1024 * 1024 * 1024;
 const MAX_AI = 40 * 1024 * 1024;
 
 // Drafts from importers get the same formatting as saved recipes.
+// Addresses of this computer on the local network (for opening the app on a phone).
+function lanAddresses() {
+  return Object.values(os.networkInterfaces()).flat()
+    .filter((i) => i && i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254.'))
+    .map((i) => i.address);
+}
+
 function draft(d) {
   const out = normalizeRecipe(d);
   if (!d.title) out.title = '';
@@ -263,6 +272,9 @@ async function handleApi(req, res, ctx, url) {
     if (parts[1] === 'url') {
       const { url: target } = await readJson(req);
       if (!target) throw new HttpError(400, 'Missing url');
+      // Instagram needs its own way in (it shows a login wall to normal requests).
+      const insta = await instagram.importInstagram(String(target).trim());
+      if (insta) return send(res, 200, { ...draft(insta.draft), videoUrl: insta.draft.videoUrl, instagram: insta.instagram, cover: insta.cover });
       return send(res, 200, draft(await importer.importUrl(String(target))));
     }
     if (parts[1] === 'text') {
@@ -499,6 +511,8 @@ function createServer(store, options = {}) {
           currency: ctx?.credits?.currency || null,
           balance: ctx?.credits?.balance ?? null,
           prices: ctx?.credits ? priceList(ctx.credits.currency) : null,
+          // For the iPhone shortcut: where a phone on the same Wi-Fi reaches this app.
+          lanUrls: hosted ? [] : lanAddresses().map((ip) => `http://${ip}:${req.socket.localPort}`),
         });
       }
       if (pathname.startsWith('/api/') || pathname.startsWith('/files/')) {
@@ -542,6 +556,7 @@ async function main() {
   }
   server.listen(port, host, () => {
     console.log(`Recipe Box is running at http://localhost:${port}`);
+    if (process.env.MULTI_USER !== '1') for (const ip of lanAddresses()) console.log(`On your phone (same Wi-Fi): http://${ip}:${port}`);
     console.log(`Saving data to ${dataDir}`);
   });
 }

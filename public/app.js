@@ -631,6 +631,19 @@ function renderEditor(existing) {
   let note = '';
   if (isNew && r.source?.type === 'url' && r.structured === false && empty) {
     note = pasteBox(`${esc(t('This page didn\'t include a structured recipe, so only the title and picture were saved.'))} <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${t('Open the page')}</a>, ${esc(state.ai ? t('copy the recipe and paste it here, or add a screenshot below and let Claude read it.') : t('copy the recipe and paste it here.'))}`);
+  } else if (isNew && r.instagram && empty) {
+    const ig = r.instagram;
+    const who = ig.author ? `@${ig.author}` : t('the creator');
+    const profile = ig.author ? ` <a href="https://www.instagram.com/${encodeURIComponent(ig.author)}/" target="_blank" rel="noopener">${t('Open the profile')}</a>.` : '';
+    const shots = state.ai
+      ? t('Take screenshots of the recipe in the video, add them here and let Claude read them.')
+      : t('Take screenshots of the recipe in the video and add them here, or type it in below.');
+    const lead = !ig.fetched ? `${esc(t('Instagram didn’t hand out this post’s caption.'))} ${esc(shots)}`
+      : ig.linkInBio ? `${esc(t('According to the post, the recipe is behind the link in {who}’s bio. Copy that link and add it as a new recipe.', { who }))}${profile}`
+      : ig.viaComment ? esc(t('{who} sends the recipe by direct message to people who comment. Paste that message here.', { who }))
+      : `${esc(t('The caption has no recipe, it’s probably shown in the video.'))} ${esc(shots)}`;
+    note = pasteBox(`${lead}<span class="row wrap"><label class="btn small">📷 ${t('Add screenshots')}<input type="file" accept="image/*" multiple hidden id="shot-input"></label>
+      <a class="btn small ghost" href="${esc(r.source.url)}" target="_blank" rel="noopener">${t('Open on Instagram')}</a></span>`);
   } else if (isNew && r.source?.type === 'video' && empty) {
     note = pasteBox(esc(t('Video saved. If the recipe is in the caption or description, copy it and paste it here.')));
   } else if (isNew && !empty && !r.filled) {
@@ -748,7 +761,7 @@ function renderEditor(existing) {
     }
   };
   form.onchange = (e) => {
-    if (e.target.id === 'pending-input') {
+    if (e.target.id === 'pending-input' || e.target.id === 'shot-input') {
       state.pendingFiles.push(...e.target.files);
       e.target.value = '';
       drawPending();
@@ -851,7 +864,25 @@ async function importLink(url) {
   setStatus(t('Fetching the recipe…'), { busy: true });
   try {
     const draft = await api.importUrl(url);
-    startDraft(draft);
+    const files = [];
+    if (draft.cover) {
+      // Instagram's picture links expire, so the picture is kept as a file.
+      const bytes = Uint8Array.from(atob(draft.cover.data), (c) => c.charCodeAt(0));
+      files.push(new File([bytes], `instagram.${draft.cover.type.split('/')[1]}`, { type: draft.cover.type }));
+    }
+    delete draft.cover;
+    if (draft.instagram?.hasRecipe && state.ai) {
+      // Captions are written for phones (emoji, run-on lines); Claude tidies them up.
+      setStatus(t('Claude is sorting the recipe from the caption…'), { busy: true });
+      const d = await api.aiExtract({ text: draft.instagram.caption }).catch(() => null);
+      if (d && (d.ingredients?.length || d.instructions?.length)) {
+        for (const k of ['title', 'description', 'ingredients', 'instructions', 'servings', 'prepTime', 'cookTime', 'totalTime', 'notes', 'tags']) {
+          if (d[k] && (!Array.isArray(d[k]) || d[k].length)) draft[k] = d[k];
+        }
+        draft.filled = true;
+      }
+    }
+    startDraft(draft, files);
   } catch (err) {
     setStatus(`${esc(err.message)}. <button class="btn small" id="save-link-anyway">${t('Save the link anyway')}</button>`, { error: true, html: true });
     $('#save-link-anyway').onclick = () => {
@@ -1574,6 +1605,33 @@ async function autoTranslate(recipe, btn) {
   }
 }
 
+// The address a phone uses: this page's address, unless it was opened as localhost on the computer.
+function phoneBase() {
+  if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) return location.origin;
+  return state.lanUrls?.[0] || '';
+}
+
+// Instructions for an iPhone shortcut that sends links (Instagram, websites) to the app.
+function iphoneShareHtml() {
+  const base = phoneBase();
+  const shareUrl = base ? `${base}/share?url=` : '';
+  return `<section class="card-box iphone-share">
+    <h2>📱 ${t('Share recipes from your iPhone')}</h2>
+    <p class="muted">${t('With a shortcut, “Recipe Box” appears in the share menu of Instagram, Safari and other apps. Set it up once:')}</p>
+    <ol class="steps-list">
+      <li>${t('Open the “Shortcuts” app on the iPhone and tap “+”.')}</li>
+      <li>${t('Add the action “URL” and replace its text with this address:')}
+        ${shareUrl ? `<div class="copy-row"><code id="share-url">${esc(shareUrl)}</code><button type="button" class="btn small" data-copy-share>${t('Copy')}</button></div>`
+          : `<p class="muted small">${t('Open this page on the iPhone to see the address.')}</p>`}
+        ${t('Then tap right after the address and choose the variable “Shortcut Input”.')}</li>
+      <li>${t('Add the action “Open URLs”.')}</li>
+      <li>${t('Tap the name at the top, call it “Recipe Box”, then tap ⓘ and turn on “Show in Share Sheet”.')}</li>
+      <li>${t('In Instagram: tap the paper plane under a post or reel, then “Share…” (or “More”), then “Recipe Box”.')}</li>
+    </ol>
+    ${state.hosted ? '' : `<p class="muted small">${t('This works while the app is running on your computer and the iPhone is on the same Wi-Fi.')}</p>`}
+  </section>`;
+}
+
 async function renderSettings() {
   document.title = `${t('Language & settings')} · Recipe Box`;
   const all = await api.list({});
@@ -1598,6 +1656,8 @@ async function renderSettings() {
             <span>${esc(nativeName(code))}</span></label>`).join('')}
         </div>
       </fieldset>
+
+      ${iphoneShareHtml()}
 
       ${state.hosted ? `<section class="card-box"><h2>💳 ${t('Credit')}</h2><p>${esc(t('Your credit: {amount}', { amount: money(state.balance / 100, state.currency, state.user?.country) }))}</p><a class="btn" href="/account" data-link>${t('Account & credit')}</a></section>` : ''}
       ${spend && !state.hosted ? `<section class="card-box usage">
@@ -1653,6 +1713,11 @@ async function renderSettings() {
     }
   };
   view.onclick = async (e) => {
+    if (e.target.closest('[data-copy-share]')) {
+      const text = $('#share-url').textContent;
+      try { await navigator.clipboard.writeText(text); toast(t('Copied')); } catch { getSelection().selectAllChildren($('#share-url')); }
+      return;
+    }
     if (await handleLocationEvent(e, renderSettings)) return;
     const btn = e.target.closest('#translate-all');
     if (!btn) return;
@@ -1937,6 +2002,7 @@ if ('serviceWorker' in navigator) {
   }
   const settings = await api.settings().catch(() => null);
   state.ai = Boolean(config?.ai);
+  state.lanUrls = config?.lanUrls || [];
   if (settings) state.settings = settings;
   if (settings && !settings.language) {
     const browser = (navigator.languages || [navigator.language || 'en']).map((l) => String(l).slice(0, 2).toLowerCase());

@@ -431,3 +431,8 @@ dialog::backdrop { background: rgb(20 14 10 / 45%); backdrop-filter: blur(2px); 
 .usage-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
 .usage-list li { display: flex; justify-content: space-between; gap: 12px; }
 .logged-out .topbar .search, .logged-out #add-btn, .logged-out #cart-btn, .logged-out #menu-btn, .logged-out .fab { display: none !important; }
+
+/* iPhone share shortcut */
+.steps-list { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
+.copy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.copy-row code { background: var(--surface-2, #f1ece4); padding: 6px 8px; border-radius: 8px; overflow-wrap: anywhere; font-size: 14px; }
