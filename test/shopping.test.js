@@ -165,3 +165,19 @@ test('nearby supermarkets fall back to other map servers, and comparing works wi
   assert.strictEqual(cmp.status, 200);
   assert.deepStrictEqual(gotStores, []);
 });
+
+test('the location search stays inside the chosen country', async (t) => {
+  const realFetch = places.deps.fetch;
+  t.after(() => { places.deps.fetch = realFetch; });
+  const urls = [];
+  places.deps.fetch = async (url) => {
+    urls.push(url);
+    return new Response(JSON.stringify([{ lat: '47.37', lon: '8.54', address: { postcode: '8001', city: 'Zürich', country_code: 'ch' } }]));
+  };
+  const s = await startServer();
+  t.after(s.stop);
+  const res = await s.call('POST', '/api/location', { query: '8001', country: 'CH' });
+  assert.match(urls[0], /countrycodes=ch/);
+  assert.strictEqual(res.json.location.country, 'CH');
+  assert.strictEqual(res.json.location.label, '8001 Zürich');
+});

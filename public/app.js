@@ -57,6 +57,7 @@ const api = {
   clearLocation: () => request('DELETE', '/api/location'),
   stores: () => request('GET', '/api/shopping/stores'),
   compare: () => request('POST', '/api/shopping/compare'),
+  usage: () => request('GET', '/api/usage'),
   importBackup: (text) => request('POST', '/api/import/backup', text, { 'Content-Type': 'application/json' }),
   upload: (id, file) => request('POST', `/api/recipes/${id}/files`, file, {
     'Content-Type': file.type || 'application/octet-stream',
@@ -540,8 +541,11 @@ function renderRecipe(rec) {
       tr.disabled = true;
       tr.innerHTML = `<span class="spinner"></span>${t('Translating…')}`;
       try {
-        Object.assign(rec, Kit.normalizeRecipe(await api.translate(rec.id, getLang())));
-        toast(t('Recipe translated'));
+        const done = await api.translate(rec.id, getLang());
+        const cost = done.costUsd;
+        delete done.costUsd;
+        Object.assign(rec, Kit.normalizeRecipe(done));
+        toast(cost != null ? t('Recipe translated (about {cost})', { cost: usd(cost) }) : t('Recipe translated'));
       } catch (err) { toast(err.message); }
       return renderRecipe(rec);
     }
@@ -1256,23 +1260,51 @@ function openAddToList(r) {
   $('[data-add-lines]', box).focus();
 }
 
-function money(value, currency) {
+// Format a price the way it's written in that country: "4,95 €" in Germany, "CHF 4.95" in Switzerland.
+function money(value, currency, country) {
   try {
-    return new Intl.NumberFormat(getLang(), { style: 'currency', currency: currency || 'EUR' }).format(value);
+    const locale = country ? `${getLang()}-${country}` : getLang();
+    return new Intl.NumberFormat(locale, { style: 'currency', currency: currency || 'EUR' }).format(value);
   } catch {
     return `${value.toFixed(2)} ${currency || ''}`.trim();
   }
 }
 
+// Claude is billed in US dollars; show costs that way, with enough digits for small amounts.
+const usd = (v) => new Intl.NumberFormat(getLang(), { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: v < 0.1 ? 3 : 2 }).format(v || 0);
+
+const actionsLabel = (n) => (n === 1 ? t('1 action') : t('{n} actions', { n }));
+
+const COUNTRY_FLAGS = { DE: '🇩🇪', AT: '🇦🇹', CH: '🇨🇭' };
+const countryName = (cc) => ({ DE: t('Germany'), AT: t('Austria'), CH: t('Switzerland') }[cc] || cc);
+
+// Country for the location form: the last one used, else the browser's region (de-CH -> CH), else Germany.
+function guessCountry() {
+  const saved = state.settings.location?.country;
+  if (Kit.COUNTRIES[saved]) return saved;
+  for (const l of navigator.languages || [navigator.language || '']) {
+    const region = String(l).split('-')[1]?.toUpperCase();
+    if (Kit.COUNTRIES[region]) return region;
+  }
+  return 'DE';
+}
+
 function locationForm(loc) {
   const canLocate = 'geolocation' in navigator && window.isSecureContext;
   if (loc) {
-    return `<div class="loc-row"><span>📍 <strong>${esc(loc.label || loc.city)}</strong></span>
+    return `<div class="loc-row"><span>📍 <strong>${esc(loc.label || loc.city)}</strong>${COUNTRY_FLAGS[loc.country] ? ` ${COUNTRY_FLAGS[loc.country]}` : ''}</span>
       <button type="button" class="btn ghost small" data-loc-change>${t('Change')}</button></div>`;
   }
+  const country = guessCountry();
   return `<form class="loc-form" data-loc-form>
-      <label class="field"><span>${t('Your postcode or town')}</span>
-        <input name="query" placeholder="${t('e.g. 10115 Berlin')}" autocomplete="postal-code" required></label>
+      <div class="loc-fields">
+        <label class="field"><span>${t('Country')}</span>
+          <select name="country" data-loc-country>
+            ${Object.keys(Kit.COUNTRIES).map((cc) => `<option value="${cc}" ${cc === country ? 'selected' : ''}>${COUNTRY_FLAGS[cc]} ${esc(countryName(cc))}</option>`).join('')}
+          </select></label>
+        <label class="field"><span>${t('Your postcode or town')}</span>
+          <input name="query" placeholder="${esc(t('e.g. {place}', { place: Kit.COUNTRIES[country].example }))}" autocomplete="postal-code" required></label>
+      </div>
       <div class="row wrap">
         <button class="btn primary" type="submit">${t('Save location')}</button>
         ${canLocate ? `<button type="button" class="btn" data-loc-gps>📍 ${t('Use my current location')}</button>` : ''}
@@ -1283,13 +1315,18 @@ function locationForm(loc) {
 
 // Handles the location form wherever it is shown. Returns true when it handled the event.
 async function handleLocationEvent(e, rerender) {
+  if (e.type === 'change' && e.target.matches('[data-loc-country]')) {
+    const input = e.target.form.elements.query;
+    input.placeholder = t('e.g. {place}', { place: Kit.COUNTRIES[e.target.value].example });
+    return true;
+  }
   if (e.type === 'submit' && e.target.matches('[data-loc-form]')) {
     e.preventDefault();
     const btn = $('button[type=submit]', e.target);
     btn.disabled = true;
     btn.innerHTML = `<span class="spinner"></span>${t('Looking up…')}`;
     try {
-      state.settings = await api.setLocation({ query: e.target.elements.query.value });
+      state.settings = await api.setLocation({ query: e.target.elements.query.value, country: e.target.elements.country.value });
       toast(t('Location saved: {place}', { place: state.settings.location.label }));
       rerender();
     } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = t('Save location'); }
@@ -1330,23 +1367,24 @@ function comparisonHtml(c, items) {
   const date = new Date(c.at).toLocaleDateString(getLang(), { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
   return `<div class="compare-result">
     ${changed ? `<p class="lang-note">${t('The list has changed since this comparison. Compare again for current numbers.')}</p>` : ''}
-    ${best ? `<div class="winner"><span class="muted small">${t('Cheapest for your list')}</span><strong>${esc(best.chain)}</strong><span class="winner-total">${esc(money(best.total, c.currency))}</span></div>` : ''}
+    ${best ? `<div class="winner"><span class="muted small">${t('Cheapest for your list')}</span><strong>${esc(best.chain)}</strong><span class="winner-total">${esc(money(best.total, c.currency, c.country))}</span></div>` : ''}
     ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
     <ol class="ranking">
       ${stores.map((st, i) => {
         const near = (c.nearby || []).find((n) => n.chain.toLowerCase() === st.chain.toLowerCase());
         return `<li class="${i === 0 ? 'best' : ''}">
           <details>
-            <summary><span class="rk-name">${esc(st.chain)}${near ? ` <span class="muted small">· ${km(near.km)}</span>` : ''}</span><span class="rk-total">${esc(money(st.total, c.currency))}</span></summary>
+            <summary><span class="rk-name">${esc(st.chain)}${near ? ` <span class="muted small">· ${km(near.km)}</span>` : ''}</span><span class="rk-total">${esc(money(st.total, c.currency, c.country))}</span></summary>
             ${near?.address ? `<p class="muted small">${esc(near.branch)} · ${esc(near.address)}</p>` : ''}
             <ul class="price-list">${(st.items || []).map((it) => `<li><span>${esc(it.item)}${it.product && it.product !== it.item ? ` <span class="muted small">(${esc(it.product)})</span>` : ''}
-              ${it.offer ? `<span class="badge offer">${t('Offer')}</span>` : ''}${it.estimated ? `<span class="badge">${t('estimated')}</span>` : ''}</span><span>${esc(money(it.price, c.currency))}</span></li>`).join('')}</ul>
+              ${it.offer ? `<span class="badge offer">${t('Offer')}</span>` : ''}${it.estimated ? `<span class="badge">${t('estimated')}</span>` : ''}</span><span>${esc(money(it.price, c.currency, c.country))}</span></li>`).join('')}</ul>
             ${st.missing?.length ? `<p class="muted small">${esc(t('Not found here: {items}', { items: st.missing.join(', ') }))}</p>` : ''}
             ${st.note ? `<p class="muted small">${esc(st.note)}</p>` : ''}
           </details></li>`;
       }).join('')}
     </ol>
     <p class="muted small">${esc(t('Estimate from {date} for {place}, based on prices Claude found online. Prices in your branch can differ.', { date, place: c.place || '' }))}</p>
+    ${c.costUsd != null ? `<p class="muted small">💳 ${esc(t('This comparison cost about {cost} in Claude usage.', { cost: usd(c.costUsd) }))}</p>` : ''}
     ${c.sources?.length ? `<details class="sources"><summary class="small">${t('Sources')}</summary><ul>${c.sources.map((src) => `<li><a href="${esc(src.url)}" target="_blank" rel="noopener">${esc(src.title || hostOf(src.url))}</a></li>`).join('')}</ul></details>` : ''}
   </div>`;
 }
@@ -1459,6 +1497,7 @@ async function renderShopping() {
     }
   };
   view.onchange = async (e) => {
+    if (await handleLocationEvent(e, rerender)) return;
     const box = e.target.closest('[data-item]');
     if (!box) return;
     await api.shopUpdate(box.dataset.item, { checked: box.checked });
@@ -1514,6 +1553,9 @@ async function renderSettings() {
   if (location.pathname !== '/settings') return;
   const target = getLang();
   const todo = all.filter((r) => { const l = recipeLang(r); return l && l !== target; });
+  const spend = await api.usage().catch(() => null);
+  if (location.pathname !== '/settings') return;
+  const ACTIONS = { 'read-text': t('Recipes read from text'), 'read-photo': t('Recipes read from photos'), translate: t('Translations'), 'compare-prices': t('Price comparisons') };
   const unknown = all.filter((r) => !recipeLang(r)).length;
   view.innerHTML = `
     <section class="settings">
@@ -1529,6 +1571,18 @@ async function renderSettings() {
             <span>${esc(nativeName(code))}</span></label>`).join('')}
         </div>
       </fieldset>
+
+      ${spend ? `<section class="card-box usage">
+        <h2>💳 ${t('Claude costs')}</h2>
+        ${spend.allTime.count ? `
+          <div class="usage-totals">
+            <div><small class="muted">${t('This month')}</small><strong>${esc(usd(spend.month.usd))}</strong><small class="muted">${esc(actionsLabel(spend.month.count))}</small></div>
+            <div><small class="muted">${t('All time')}</small><strong>${esc(usd(spend.allTime.usd))}</strong><small class="muted">${esc(actionsLabel(spend.allTime.count))}</small></div>
+          </div>
+          <ul class="usage-list">${Object.entries(spend.month.byAction).map(([a, v]) => `<li><span>${esc(ACTIONS[a] || a)} <span class="muted small">× ${v.count}</span></span><span>${esc(usd(v.usd))}</span></li>`).join('')}</ul>`
+          : `<p class="muted">${t('No Claude costs yet.')}</p>`}
+        <p class="muted small">${t('What Anthropic charges for the API, in US dollars, measured from the tokens and web searches each action used.')}</p>
+      </section>` : ''}
 
       <section class="card-box">
         <h2>📍 ${t('Location')}</h2>
@@ -1560,6 +1614,7 @@ async function renderSettings() {
 
   view.onsubmit = (e) => { e.preventDefault(); handleLocationEvent(e, renderSettings); };
   view.onchange = async (e) => {
+    if (await handleLocationEvent(e, renderSettings)) return;
     if (e.target.name === 'lang') {
       await chooseLanguage(e.target.value);
       return renderSettings();
@@ -1579,11 +1634,12 @@ async function renderSettings() {
     const status = $('#tr-status');
     box.hidden = false;
     const failed = [];
+    let spent = 0;
     for (let i = 0; i < todo.length; i++) {
       status.textContent = t('Translating {n} of {total}: {title}', { n: i + 1, total: todo.length, title: todo[i].title });
       bar.style.width = `${Math.round((i / todo.length) * 100)}%`;
       try {
-        await api.translate(todo[i].id, target);
+        spent += (await api.translate(todo[i].id, target)).costUsd || 0;
       } catch (err) {
         failed.push(`${todo[i].title}: ${err.message}`);
         // A missing or rejected key fails every recipe the same way; stop early.
@@ -1592,7 +1648,7 @@ async function renderSettings() {
     }
     bar.style.width = '100%';
     const ok = todo.length - failed.length;
-    toast(ok === 1 ? t('1 recipe translated') : t('{n} recipes translated', { n: ok }));
+    toast(`${ok === 1 ? t('1 recipe translated') : t('{n} recipes translated', { n: ok })} · ${t('about {cost}', { cost: usd(spent) })}`);
     await renderSettings();
     if (failed.length) {
       $('.card-box').insertAdjacentHTML('beforeend', `<div class="lang-note error"><strong>${esc(t('Not translated:'))}</strong><ul>${failed.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></div>`);

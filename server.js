@@ -182,11 +182,12 @@ async function handleApi(req, res, store, url) {
       if ((recipe.lang || detectLang(recipe)) === to) {
         return send(res, 200, recipe.lang === to ? recipe : await store.update(id, { lang: to }));
       }
-      const result = await ai.translateRecipe(recipe, to);
+      let cost = null;
+      const result = await ai.translateRecipe(recipe, to, { onCost: (c) => { cost = store.usage.record('translate', c); } });
       const from = LANGUAGES[result.sourceLanguage] ? result.sourceLanguage : null;
       if (from === to) return send(res, 200, await store.update(id, { lang: to }));
       const { sourceLanguage, ...fields } = result;
-      return send(res, 200, await store.applyTranslation(id, fields, { from, to }));
+      return send(res, 200, { ...(await store.applyTranslation(id, fields, { from, to })), costUsd: cost?.usd ?? null });
     } else if (sub === 'original' && method === 'POST') {
       const restored = await store.restoreOriginal(id);
       return restored ? send(res, 200, restored) : send(res, 404, { error: 'This recipe has no original to go back to' });
@@ -212,6 +213,8 @@ async function handleApi(req, res, store, url) {
 
   if (parts[0] === 'config' && method === 'GET') return send(res, 200, { ai: ai.isEnabled() });
 
+  if (parts[0] === 'usage' && method === 'GET') return send(res, 200, store.usage.summary());
+
   if (parts[0] === 'shopping') return handleShopping(req, res, store, parts.slice(1));
 
   if (parts[0] === 'location') {
@@ -221,7 +224,7 @@ async function handleApi(req, res, store, url) {
       const lang = store.getSettings().language || 'de';
       const place = Number.isFinite(body.lat) && Number.isFinite(body.lon)
         ? await places.reverseGeocode(body.lat, body.lon, lang)
-        : await places.geocode(body.query, lang);
+        : await places.geocode(body.query, lang, body.country);
       return send(res, 200, await store.updateSettings({ location: place }));
     }
   }
@@ -233,7 +236,9 @@ async function handleApi(req, res, store, url) {
 
   if (parts[0] === 'ai' && parts[1] === 'extract' && method === 'POST') {
     const body = await readJson(req, MAX_AI);
-    return send(res, 200, draft({ ...(await ai.extractRecipe(body)), source: { type: body.images ? 'file' : 'text', url: '' } }));
+    let cost = null;
+    const result = await ai.extractRecipe(body, { onCost: (c) => { cost = store.usage.record(body.images ? 'read-photo' : 'read-text', c); } });
+    return send(res, 200, { ...draft({ ...result, source: { type: body.images ? 'file' : 'text', url: '' } }), costUsd: cost?.usd ?? null });
   }
 
   if (parts[0] === 'import' && method === 'POST') {
@@ -293,16 +298,20 @@ async function handleShopping(req, res, store, parts) {
     const open = list.open();
     // If the supermarket map is down, Claude works out the local chains itself.
     const stores = await places.nearbySupermarkets(location).catch(() => []);
+    let cost = null;
     const result = await ai.compareSupermarkets({
       items: open.map((i) => ({ name: i.name, amount: formatAmount(i.qty, i.unit) })),
       place: location,
       stores,
       lang: store.getSettings().language || 'de',
+      onCost: (c) => { cost = store.usage.record('compare-prices', c); },
     });
     const comparison = {
       ...result,
       at: new Date().toISOString(),
       place: location.label,
+      country: location.country,
+      costUsd: cost?.usd ?? null,
       itemKeys: open.map((i) => i.key),
       nearby: stores.map(({ chain, branch, address, km }) => ({ chain, branch, address, km })),
     };

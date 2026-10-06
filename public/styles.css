@@ -366,6 +366,8 @@ dialog::backdrop { background: rgb(20 14 10 / 45%); backdrop-filter: blur(2px); 
 .small-empty { padding: 24px 12px; }
 .loc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .loc-form { display: grid; gap: 8px; }
+.loc-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px; }
+@media (max-width: 480px) { .loc-fields { grid-template-columns: 1fr; } }
 .nearby .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .compare-result { display: grid; gap: 10px; margin-top: 4px; }
 .winner { display: grid; gap: 2px; background: var(--accent-soft); border-radius: 12px; padding: 12px 14px; }
@@ -382,6 +384,12 @@ dialog::backdrop { background: rgb(20 14 10 / 45%); backdrop-filter: blur(2px); 
 .badge.offer { background: var(--accent-soft); color: var(--accent); font-weight: 600; margin-left: 4px; }
 .price-list .badge { margin-left: 4px; font-size: 11px; }
 .sources ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; overflow-wrap: anywhere; }
+
+.usage-totals { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.usage-totals > div { display: grid; gap: 2px; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.usage-totals strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.usage-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.usage-list li { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dashed var(--border); padding: 4px 0; font-variant-numeric: tabular-nums; }
 
 /* ---------- Small screens ---------- */
 @media (max-width: 720px) {

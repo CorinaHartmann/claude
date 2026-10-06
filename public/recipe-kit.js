@@ -361,6 +361,19 @@ function categorize(name) {
   return 'other';
 }
 
+// ---------- Countries (Germany, Austria, Switzerland) ----------
+const COUNTRIES = {
+  DE: { currency: 'EUR', example: '10115 Berlin',
+    chains: ['Aldi', 'Lidl', 'REWE', 'EDEKA', 'Kaufland', 'Netto', 'Penny'],
+    sources: 'rewe.de, edeka.de, kaufland.de, lidl.de, aldi-nord.de / aldi-sued.de, netto-online.de, penny.de, and leaflet sites such as kaufDA or marktguru.de' },
+  AT: { currency: 'EUR', example: '1010 Wien',
+    chains: ['Hofer', 'Lidl', 'Billa', 'Spar', 'Penny', 'Interspar'],
+    sources: 'billa.at, spar.at, hofer.at, lidl.at, penny.at, and leaflet sites such as aktionsfinder.at or marktguru.at' },
+  CH: { currency: 'CHF', example: '8001 Zürich',
+    chains: ['Migros', 'Coop', 'Denner', 'Aldi Suisse', 'Lidl', 'Volg', 'Spar'],
+    sources: 'migros.ch, coop.ch, denner.ch, aldi-suisse.ch, lidl.ch, volg.ch, and price comparison sites for Swiss supermarkets' },
+};
+
 // ---------- Languages ----------
 const LANGUAGES = {
   de: { name: 'Deutsch', english: 'German' },
@@ -401,5 +414,6 @@ return {
   findDurations, fmtDur, fmtClock,
   LANGUAGES, detectLang,
   parseIngredientLine, shoppingKey, toBase, formatAmount, categorize, CATEGORY_ORDER,
+  COUNTRIES,
 };
 });
