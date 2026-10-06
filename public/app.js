@@ -29,7 +29,7 @@ async function request(method, path, body, headers = {}) {
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || t('Request failed ({status})', { status: res.status }));
+  if (!res.ok) throw Object.assign(new Error(data.error || t('Request failed ({status})', { status: res.status })), { status: res.status });
   return data;
 }
 
@@ -1408,7 +1408,14 @@ async function renderShopping() {
       box.innerHTML = stores.length
         ? `<p class="muted small">${esc(t('Supermarkets within 3 km:'))}</p><div class="chips">${stores.map((st) => `<span class="badge" title="${esc(st.address || '')}">${esc(st.chain)} · ${km(st.km)}</span>`).join('')}</div>`
         : `<p class="muted small">${t('No supermarkets found within 3 km.')}</p>`;
-    }).catch((err) => { const box = $('#nearby'); if (box) box.innerHTML = `<p class="muted small">${esc(err.message)}</p>`; });
+    }).catch((err) => {
+      const box = $('#nearby');
+      if (!box) return;
+      const msg = err.status === 503
+        ? t('The supermarket map (OpenStreetMap) is overloaded right now, so nearby supermarkets can’t be shown. The price comparison still works: Claude then looks up the local supermarkets itself.')
+        : err.message;
+      box.innerHTML = `<p class="muted small">${esc(msg)}</p>`;
+    });
   }
 
   const rerender = () => renderShopping();

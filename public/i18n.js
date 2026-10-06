@@ -437,6 +437,12 @@ const STRINGS = {
     'Estimación del {date} para {place}, según los precios que Claude encontró en internet. Los precios de tu tienda pueden variar.',
     'Schatting van {date} voor {place}, op basis van prijzen die Claude online vond. Prijzen in jouw filiaal kunnen afwijken.'],
   'Sources': ['Quellen', 'Sources', 'Fonti', 'Fuentes', 'Bronnen'],
+  'The supermarket map (OpenStreetMap) is overloaded right now, so nearby supermarkets can’t be shown. The price comparison still works: Claude then looks up the local supermarkets itself.': [
+    'Die Supermarkt-Karte (OpenStreetMap) ist gerade überlastet, deshalb können die Supermärkte in der Nähe nicht angezeigt werden. Der Preisvergleich funktioniert trotzdem: Claude sucht die Supermärkte vor Ort dann selbst heraus.',
+    'La carte des supermarchés (OpenStreetMap) est surchargée pour le moment ; les supermarchés à proximité ne peuvent pas être affichés. La comparaison des prix fonctionne quand même : Claude recherche alors lui-même les supermarchés du coin.',
+    'La mappa dei supermercati (OpenStreetMap) è sovraccarica al momento, quindi i supermercati vicini non possono essere mostrati. Il confronto dei prezzi funziona comunque: Claude cerca da solo i supermercati della zona.',
+    'El mapa de supermercados (OpenStreetMap) está saturado ahora mismo, así que no se pueden mostrar los supermercados cercanos. La comparación de precios sigue funcionando: Claude busca por sí mismo los supermercados de la zona.',
+    'De supermarktkaart (OpenStreetMap) is op dit moment overbelast, dus supermarkten in de buurt kunnen niet worden getoond. De prijsvergelijking werkt nog steeds: Claude zoekt de supermarkten in de buurt dan zelf op.'],
 };
 
 // Language names as written in each app language (de, en, fr, it, es, nl).

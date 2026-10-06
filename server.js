@@ -291,7 +291,8 @@ async function handleShopping(req, res, store, parts) {
   if (what === 'compare' && method === 'POST') {
     if (!location) throw new HttpError(400, 'Set your location first.');
     const open = list.open();
-    const stores = await places.nearbySupermarkets(location);
+    // If the supermarket map is down, Claude works out the local chains itself.
+    const stores = await places.nearbySupermarkets(location).catch(() => []);
     const result = await ai.compareSupermarkets({
       items: open.map((i) => ({ name: i.name, amount: formatAmount(i.qty, i.unit) })),
       place: location,

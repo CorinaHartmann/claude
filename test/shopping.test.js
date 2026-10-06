@@ -121,3 +121,47 @@ test('comparison without Claude says what is missing', async (t) => {
   if (process.env.ANTHROPIC_AUTH_TOKEN) return;
   await assert.rejects(ai.compareSupermarkets({ items: [{ name: 'Mehl' }], place: {}, stores: [{ chain: 'Lidl', km: 1 }] }), (e) => e.status === 503);
 });
+
+test('nearby supermarkets fall back to other map servers, and comparing works without them', async (t) => {
+  const realFetch = places.deps.fetch;
+  const realCompare = ai.compareSupermarkets;
+  t.after(() => { places.deps.fetch = realFetch; ai.compareSupermarkets = realCompare; });
+  const tried = [];
+  let overpassDown = 1; // first server fails, second answers
+  places.deps.fetch = async (url) => {
+    if (url.includes('/search')) return new Response(JSON.stringify([{ lat: '48.14', lon: '11.58', address: { postcode: '80331', city: 'München', country_code: 'de' } }]));
+    tried.push(url);
+    if (tried.length <= overpassDown) return new Response('busy', { status: 504 });
+    return new Response(JSON.stringify({ elements: [{ lat: 48.141, lon: 11.581, tags: { shop: 'supermarket', brand: 'Netto' } }] }));
+  };
+  let gotStores = null;
+  ai.compareSupermarkets = async ({ stores }) => {
+    gotStores = stores;
+    return { currency: 'EUR', stores: [], cheapest: '', summary: '', sources: [] };
+  };
+  const s = await startServer();
+  t.after(s.stop);
+  await s.call('POST', '/api/location', { query: '80331 München' });
+  const near = await s.call('GET', '/api/shopping/stores');
+  assert.deepStrictEqual(near.json.stores.map((x) => x.chain), ['Netto']);
+  assert.deepStrictEqual(tried.slice(0, 2), places.OVERPASS.slice(0, 2));
+
+  // Every map server down: the stores endpoint explains it, comparing still runs.
+  overpassDown = Infinity;
+  tried.length = 0;
+  await s.call('POST', '/api/location', { query: '80331 München' });
+  places.deps.fetch = async (url) => {
+    if (url.includes('/search')) return new Response(JSON.stringify([{ lat: '48.2', lon: '11.6', address: { city: 'München', country_code: 'de' } }]));
+    tried.push(url);
+    return new Response('busy', { status: 504 });
+  };
+  await s.call('POST', '/api/location', { query: 'München Nord' });
+  const down = await s.call('GET', '/api/shopping/stores');
+  assert.strictEqual(down.status, 503);
+  assert.match(down.json.error, /overloaded/);
+  assert.strictEqual(tried.length, places.OVERPASS.length);
+  await s.call('POST', '/api/shopping/items', { lines: ['1 l Milch'] });
+  const cmp = await s.call('POST', '/api/shopping/compare');
+  assert.strictEqual(cmp.status, 200);
+  assert.deepStrictEqual(gotStores, []);
+});
