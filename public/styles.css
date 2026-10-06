@@ -411,3 +411,23 @@ dialog::backdrop { background: rgb(20 14 10 / 45%); backdrop-filter: blur(2px); 
   .hero { max-height: 240px; }
   .ingredients input { display: none; }
 }
+
+/* Hosted version: login, credit, account */
+.balance-chip { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.balance-chip.low { color: var(--danger, #b3261e); }
+.auth { display: grid; place-items: center; min-height: 70vh; padding: 16px 0; }
+.auth-card { width: min(420px, 100%); display: grid; gap: 14px; }
+.auth-card h1 { margin: 0; }
+.auth-form { display: grid; gap: 12px; }
+.auth-tabs { display: flex; gap: 6px; }
+.auth-tabs button { flex: 1; }
+.lang-mini { max-width: 220px; }
+.err { color: var(--danger, #b3261e); margin: 0; min-height: 1em; }
+.balance-big { display: grid; gap: 2px; }
+.balance-big strong { font-size: 32px; font-variant-numeric: tabular-nums; }
+.packs { display: flex; flex-wrap: wrap; gap: 8px; }
+.usage-list .plus { color: var(--ok, #2e7d32); }
+.delete-form { display: grid; gap: 10px; margin-top: 12px; }
+.usage-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.usage-list li { display: flex; justify-content: space-between; gap: 12px; }
+.logged-out .topbar .search, .logged-out #add-btn, .logged-out #cart-btn, .logged-out #menu-btn, .logged-out .fab { display: none !important; }

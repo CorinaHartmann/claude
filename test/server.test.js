@@ -173,7 +173,9 @@ test('reading with Claude is reported as off without an API key', async (t) => {
   delete process.env.ANTHROPIC_API_KEY;
   t.after(() => { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; });
   if (!process.env.ANTHROPIC_AUTH_TOKEN) {
-    assert.deepStrictEqual((await s.call('GET', '/api/config')).json, { ai: false });
+    const cfg = (await s.call('GET', '/api/config')).json;
+    assert.strictEqual(cfg.ai, false);
+    assert.strictEqual(cfg.hosted, false);
     const res = await s.call('POST', '/api/ai/extract', { text: 'Toast' });
     assert.strictEqual(res.status, 503);
   }

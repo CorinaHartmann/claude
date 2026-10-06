@@ -27,11 +27,13 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       <span data-i18n="Add recipe">Add recipe</span>
     </button>
+    <a href="/account" id="balance-chip" class="btn small ghost balance-chip" data-link hidden></a>
     <a href="/shopping" id="cart-btn" class="btn icon ghost cart" data-link aria-label="Shopping list" data-i18n-aria="Shopping list">🛒<span id="cart-count" class="cart-count" hidden></span></a>
     <button id="menu-btn" class="btn icon ghost" aria-label="Backup and settings" data-i18n-aria="Backup and settings" aria-haspopup="menu">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
     </button>
     <div id="menu" class="menu" role="menu" hidden>
+      <a href="/account" role="menuitem" id="menu-account" data-link hidden>💳 <span data-i18n="Account & credit">Account &amp; credit</span></a>
       <a href="/settings" role="menuitem" data-link>🌐 <span data-i18n="Language & settings">Language &amp; settings</span></a>
       <a href="/api/export" role="menuitem" download data-i18n="Download backup">Download backup</a>
       <button role="menuitem" id="import-backup-btn" data-i18n="Restore from backup…">Restore from backup…</button>

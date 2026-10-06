@@ -95,6 +95,69 @@ On Android, the installed app shows up in the **Share** menu, so you can share a
 
 > **Privacy note:** there are no accounts or passwords, and anyone who can reach the server can see and edit your recipes. Keep it on your home network. To reach it from outside your home, put it behind something that adds a login, such as Tailscale or a reverse proxy with authentication.
 
+## Publishing it for others (accounts and paid credit)
+
+By default the app is a personal, single-user app with no login, and Claude is billed
+to your own Anthropic key. To run it as a website for other people, start it in
+**hosted mode**:
+
+- People create an account (e-mail + password). Each account has its own recipes,
+  photos, shopping list and settings.
+- Recipes, shopping list and cooking mode are free. Everything that uses Claude
+  (reading a recipe, translating, price comparison) is paid from **prepaid credit**.
+- Each action is charged at its *measured* Claude cost × `PRICE_MARKUP` (default 3),
+  converted to CHF (Switzerland) or EUR (Germany, Austria). Users see the typical
+  price on the button before they click, and the exact amount afterwards.
+- Credit is topped up in packs of 5, 10 or 20 through **Stripe Checkout** (cards,
+  Apple Pay, Google Pay, TWINT, SEPA – whatever you switch on in Stripe).
+
+### Settings
+
+| Variable | What it does |
+| --- | --- |
+| `MULTI_USER=1` | Turns on hosted mode (accounts, credit, payments). |
+| `ANTHROPIC_API_KEY` | Your Claude key – all users' actions run on it. |
+| `PUBLIC_URL` | The public address, e.g. `https://rezepte.example.ch` (Stripe sends people back here). |
+| `STRIPE_SECRET_KEY` | `sk_test_…` while testing, `sk_live_…` when live. |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` of the webhook endpoint (see below). |
+| `PRICE_MARKUP` | Price relative to the Claude cost. Default `3`. |
+| `USD_TO_EUR`, `USD_TO_CHF` | Exchange rates for prices. Defaults `0.86` / `0.80` – set current rates. |
+| `START_CREDIT` | Free credit for new accounts in cents/Rappen, e.g. `50`. Default `0`. |
+| `TRUST_PROXY=1` | Set when running behind a reverse proxy (for correct client IPs in rate limiting). |
+| `DATA_DIR` | Where accounts and user data are stored. Back this folder up. |
+
+Stripe needs Node.js 20 or newer.
+
+```bash
+MULTI_USER=1 PUBLIC_URL=https://rezepte.example.ch \
+ANTHROPIC_API_KEY=sk-ant-… STRIPE_SECRET_KEY=sk_live_… STRIPE_WEBHOOK_SECRET=whsec_… \
+npm start
+```
+
+### Stripe setup
+
+1. Create a Stripe account and complete the business details.
+2. Under **Settings → Payment methods**, switch on what you want (TWINT for CHF, SEPA for EUR, …).
+3. Under **Developers → Webhooks**, add the endpoint `https://<your address>/api/billing/webhook`
+   with the events `checkout.session.completed` and `checkout.session.async_payment_succeeded`.
+   Copy its signing secret into `STRIPE_WEBHOOK_SECRET`.
+4. Test with `sk_test_…` and the card `4242 4242 4242 4242` first.
+
+Credit is booked when Stripe calls the webhook, and also when the user returns to the
+account page; each payment is only ever booked once.
+
+### Hosting
+
+Run it on any server with Node.js (a small VPS, Render, Railway, Fly.io, …) behind HTTPS
+– login cookies need HTTPS. The data folder must be on persistent storage.
+
+### Before you go live
+
+Selling credit makes this a business. Check with a professional for your country, at least:
+an imprint (Impressum), terms (AGB) that explain how credit works and whether it expires,
+a privacy policy (Datenschutzerklärung – the app stores e-mail addresses and sends recipe
+text to Anthropic, OpenStreetMap and Stripe), and VAT on the credit you sell.
+
 ## Development
 
 ```sh
@@ -148,3 +211,16 @@ test/              Tests (node:test)
 | POST   | `/api/ai/extract`                  | `{ "text": "…" }` or `{ "images": [{ "type", "data" }] }` → draft recipe (not saved) |
 | GET    | `/api/export`                      | Full backup with files embedded                  |
 | POST   | `/api/import/backup`               | A backup file; adds its recipes as new copies    |
+
+In hosted mode there are also (all non-GET requests need the header `X-Recipe-Box: 1`):
+
+| Method | Path                               | What it does                                     |
+| ------ | ---------------------------------- | ------------------------------------------------ |
+| POST   | `/api/auth/register`               | `{ "email", "password", "country": "CH" }`       |
+| POST   | `/api/auth/login`                  | `{ "email", "password" }`                        |
+| POST   | `/api/auth/logout`                 |                                                  |
+| POST   | `/api/auth/delete`                 | `{ "password" }`: delete the account and its data |
+| GET    | `/api/billing`                     | Balance, history, top-up packs, prices per action |
+| POST   | `/api/billing/checkout`            | `{ "amount": 1000 }` → Stripe Checkout URL       |
+| POST   | `/api/billing/confirm`             | `{ "sessionId": "cs_…" }`: book a finished payment |
+| POST   | `/api/billing/webhook`             | Stripe webhook (signed)                          |

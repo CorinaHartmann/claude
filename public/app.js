@@ -13,7 +13,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
 // ---------- API ----------
 
 async function request(method, path, body, headers = {}) {
-  const opts = { method, headers: { ...headers } };
+  // The header tells the server the request comes from this app (see server.js).
+  const opts = { method, headers: { 'X-Recipe-Box': '1', ...headers } };
   if (body !== undefined) {
     if (body instanceof Blob || typeof body === 'string') opts.body = body;
     else {
@@ -29,7 +30,12 @@ async function request(method, path, body, headers = {}) {
   }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || t('Request failed ({status})', { status: res.status })), { status: res.status });
+  if (!res.ok) {
+    if (res.status === 401 && data.code === 'login' && state.hosted) { state.user = null; render(); }
+    if (res.status === 402 && data.code === 'no_credit') showNoCredit(data);
+    throw Object.assign(new Error(data.error || t('Request failed ({status})', { status: res.status })), { status: res.status, code: data.code });
+  }
+  if (data && data.charged) setBalance(data.charged.balance);
   return data;
 }
 
@@ -58,6 +64,13 @@ const api = {
   stores: () => request('GET', '/api/shopping/stores'),
   compare: () => request('POST', '/api/shopping/compare'),
   usage: () => request('GET', '/api/usage'),
+  register: (body) => request('POST', '/api/auth/register', body),
+  login: (body) => request('POST', '/api/auth/login', body),
+  logout: () => request('POST', '/api/auth/logout'),
+  deleteAccount: (password) => request('POST', '/api/auth/delete', { password }),
+  billing: () => request('GET', '/api/billing'),
+  checkout: (amount) => request('POST', '/api/billing/checkout', { amount, lang: getLang() }),
+  confirmPayment: (sessionId) => request('POST', '/api/billing/confirm', { sessionId }),
   importBackup: (text) => request('POST', '/api/import/backup', text, { 'Content-Type': 'application/json' }),
   upload: (id, file) => request('POST', `/api/recipes/${id}/files`, file, {
     'Content-Type': file.type || 'application/octet-stream',
@@ -76,6 +89,11 @@ const state = {
   pendingFiles: [], // files to upload once the draft is saved
   ai: false, // Claude reading is available (server has an API key)
   cook: null, // recipe open in cooking mode
+  hosted: false, // hosted version with accounts and prepaid credit
+  user: null,
+  currency: null,
+  balance: null,
+  prices: null, // typical price per Claude action, in cents/Rappen
   settings: { language: null, autoTranslate: true },
 };
 
@@ -246,11 +264,15 @@ async function render() {
   view.onsubmit = null;
   const path = location.pathname;
   let m;
+  document.body.classList.toggle('logged-out', state.hosted && !state.user);
+  $('#menu-account').hidden = !state.hosted;
+  if (state.hosted && !state.user) return renderLogin();
   try {
     if (path === '/share') return handleShare();
     if (path === '/new') return renderEditor(null);
     if (path === '/settings') return renderSettings();
     if (path === '/shopping') return renderShopping();
+    if (path === '/account' && state.hosted) return renderAccount();
     if ((m = /^\/recipe\/([a-f0-9]+)\/edit$/.exec(path))) return renderEditor(Kit.normalizeRecipe(await api.get(m[1])));
     if ((m = /^\/recipe\/([a-f0-9]+)$/.exec(path))) {
       if (state.lastRecipe !== m[1]) state.showOriginal = false;
@@ -542,10 +564,11 @@ function renderRecipe(rec) {
       tr.innerHTML = `<span class="spinner"></span>${t('Translating…')}`;
       try {
         const done = await api.translate(rec.id, getLang());
-        const cost = done.costUsd;
+        const cost = done.charged ? money(done.charged.amount / 100, done.charged.currency, state.user?.country) : done.costUsd != null ? usd(done.costUsd) : null;
         delete done.costUsd;
+        delete done.charged;
         Object.assign(rec, Kit.normalizeRecipe(done));
-        toast(cost != null ? t('Recipe translated (about {cost})', { cost: usd(cost) }) : t('Recipe translated'));
+        toast(cost ? t('Recipe translated (about {cost})', { cost }) : t('Recipe translated'));
       } catch (err) { toast(err.message); }
       return renderRecipe(rec);
     }
@@ -602,8 +625,8 @@ function renderEditor(existing) {
   const photos = () => (isNew ? state.pendingFiles.filter((f) => /^image\//.test(f.type)) : (r.attachments || []).filter(isImage));
   const pasteBox = (lead) => `<div class="import-note paste-note"><span>${lead}</span>
       <textarea id="paste-in" rows="5" placeholder="${t('Paste the recipe here')}" aria-label="${t('Recipe text')}"></textarea>
-      <div class="row wrap"><button type="button" class="btn primary small" data-readtext>${state.ai ? `✨ ${t('Fill in with Claude')}` : t('Fill in')}</button>
-      ${state.ai ? `<button type="button" class="btn small" data-readphotos hidden>✨ ${t('Read from photos instead')}</button>` : ''}</div></div>`;
+      <div class="row wrap"><button type="button" class="btn primary small" data-readtext>${state.ai ? `✨ ${t('Fill in with Claude')}${priceTag('read-text')}` : t('Fill in')}</button>
+      ${state.ai ? `<button type="button" class="btn small" data-readphotos hidden>✨ ${t('Read from photos instead')}${priceTag('read-photo')}</button>` : ''}</div></div>`;
   let note = '';
   if (isNew && r.source?.type === 'url' && r.structured === false && empty) {
     note = pasteBox(`${esc(t('This page didn\'t include a structured recipe, so only the title and picture were saved.'))} <a href="${esc(r.source.url)}" target="_blank" rel="noopener">${t('Open the page')}</a>, ${esc(state.ai ? t('copy the recipe and paste it here, or add a screenshot below and let Claude read it.') : t('copy the recipe and paste it here.'))}`);
@@ -1384,7 +1407,8 @@ function comparisonHtml(c, items) {
       }).join('')}
     </ol>
     <p class="muted small">${esc(t('Estimate from {date} for {place}, based on prices Claude found online. Prices in your branch can differ.', { date, place: c.place || '' }))}</p>
-    ${c.costUsd != null ? `<p class="muted small">💳 ${esc(t('This comparison cost about {cost} in Claude usage.', { cost: usd(c.costUsd) }))}</p>` : ''}
+    ${c.charged ? `<p class="muted small">💳 ${esc(t('Charged for this comparison: {cost}', { cost: money(c.charged.amount / 100, c.charged.currency, state.user?.country) }))}</p>`
+      : c.costUsd != null ? `<p class="muted small">💳 ${esc(t('This comparison cost about {cost} in Claude usage.', { cost: usd(c.costUsd) }))}</p>` : ''}
     ${c.sources?.length ? `<details class="sources"><summary class="small">${t('Sources')}</summary><ul>${c.sources.map((src) => `<li><a href="${esc(src.url)}" target="_blank" rel="noopener">${esc(src.title || hostOf(src.url))}</a></li>`).join('')}</ul></details>` : ''}
   </div>`;
 }
@@ -1433,8 +1457,10 @@ async function renderShopping() {
         ${loc ? `<div id="nearby" class="nearby"><span class="spinner"></span> ${t('Looking for supermarkets nearby…')}</div>` : ''}
         ${loc && state.ai && open.length ? `
           <button class="btn primary" id="compare-btn">${esc(open.length === 1 ? t('Compare prices for 1 item') : t('Compare prices for {n} items', { n: open.length }))}</button>
-          <p class="muted small">${t('Claude searches current prices and offers of these supermarkets online and estimates the total for each. This takes about a minute and costs roughly 20–50 cents on your Anthropic account.')}</p>` : ''}
-        ${loc && !state.ai ? `<p class="muted small">${t('To compare prices, start the app with an Anthropic API key (see “Language & settings”).')}</p>` : ''}
+          <p class="muted small">${state.hosted
+            ? esc(t('Claude searches current prices and offers of these supermarkets online and estimates the total for each. This takes about a minute and costs about {price} from your credit.', { price: priceText('compare-prices') }))
+            : t('Claude searches current prices and offers of these supermarkets online and estimates the total for each. This takes about a minute and costs roughly 20–50 cents on your Anthropic account.')}</p>` : ''}
+        ${loc && !state.ai ? `<p class="muted small">${state.hosted ? t('The price comparison is not available on this server right now.') : t('To compare prices, start the app with an Anthropic API key (see “Language & settings”).')}</p>` : ''}
         <div id="compare-out">${comparisonHtml(data.comparison, items)}</div>
       </section>
     </section>`;
@@ -1528,7 +1554,7 @@ function translationBanner(r) {
   if (!lang || lang === target) return '';
   return `<div class="lang-note">
     <span>🌐 ${esc(t('This recipe is in {lang}.', { lang: langName(lang) }))}</span>
-    ${state.ai ? `<button class="btn small primary" data-translate-now>${esc(t('Translate into {lang}', { lang: langName(target) }))}</button>`
+    ${state.ai ? `<button class="btn small primary" data-translate-now>${esc(t('Translate into {lang}', { lang: langName(target) }))}${priceTag('translate')}</button>`
       : `<a href="/settings" data-link class="small">${t('How to turn on translation')}</a>`}
   </div>`;
 }
@@ -1553,7 +1579,7 @@ async function renderSettings() {
   if (location.pathname !== '/settings') return;
   const target = getLang();
   const todo = all.filter((r) => { const l = recipeLang(r); return l && l !== target; });
-  const spend = await api.usage().catch(() => null);
+  const spend = state.hosted ? null : await api.usage().catch(() => null);
   if (location.pathname !== '/settings') return;
   const ACTIONS = { 'read-text': t('Recipes read from text'), 'read-photo': t('Recipes read from photos'), translate: t('Translations'), 'compare-prices': t('Price comparisons') };
   const unknown = all.filter((r) => !recipeLang(r)).length;
@@ -1572,7 +1598,8 @@ async function renderSettings() {
         </div>
       </fieldset>
 
-      ${spend ? `<section class="card-box usage">
+      ${state.hosted ? `<section class="card-box"><h2>💳 ${t('Credit')}</h2><p>${esc(t('Your credit: {amount}', { amount: money(state.balance / 100, state.currency, state.user?.country) }))}</p><a class="btn" href="/account" data-link>${t('Account & credit')}</a></section>` : ''}
+      ${spend && !state.hosted ? `<section class="card-box usage">
         <h2>💳 ${t('Claude costs')}</h2>
         ${spend.allTime.count ? `
           <div class="usage-totals">
@@ -1598,10 +1625,10 @@ async function renderSettings() {
             ? esc(todo.length === 1 ? t('1 recipe is in another language.') : t('{n} recipes are in another language.', { n: todo.length }))
             : esc(t('All your recipes are in {lang}.', { lang: langName(target) }))}
             ${unknown ? `<span class="muted">${esc(unknown === 1 ? t('For 1 recipe the language isn’t clear (for example only a photo); it is left as it is.') : t('For {n} recipes the language isn’t clear (for example only a photo); they are left as they are.', { n: unknown }))}</span>` : ''}</p>
-          ${todo.length ? `<button class="btn primary" id="translate-all">${esc(t('Translate {n} into {lang}', { n: todo.length, lang: langName(target) }))}</button>` : ''}
+          ${todo.length ? `<button class="btn primary" id="translate-all">${esc(t('Translate {n} into {lang}', { n: todo.length, lang: langName(target) }))}${state.hosted ? esc(` · ≈ ${money((state.prices.translate * todo.length) / 100, state.currency, state.user?.country)}`) : ''}</button>` : ''}
           <div id="tr-progress" class="tr-progress" hidden><div class="bar"><span></span></div><p class="muted" id="tr-status"></p></div>
           <p class="muted small">${t('The original text of every recipe is kept. Open a recipe and choose “Show original” or “Restore original” to see or get it back.')}</p>`
-        : `
+        : state.hosted ? `<p class="muted">${t('Translating is not available on this server right now.')}</p>` : `
           <p>${t('Translating recipes uses Claude, which needs an Anthropic API key.')}</p>
           <ol class="steps-plain">
             <li>${t('Get a key at console.anthropic.com (each translation costs about 1–3 cents).')}</li>
@@ -1639,16 +1666,17 @@ async function renderSettings() {
       status.textContent = t('Translating {n} of {total}: {title}', { n: i + 1, total: todo.length, title: todo[i].title });
       bar.style.width = `${Math.round((i / todo.length) * 100)}%`;
       try {
-        spent += (await api.translate(todo[i].id, target)).costUsd || 0;
+        const done = await api.translate(todo[i].id, target);
+        spent += done.charged ? done.charged.amount / 100 : done.costUsd || 0;
       } catch (err) {
         failed.push(`${todo[i].title}: ${err.message}`);
-        // A missing or rejected key fails every recipe the same way; stop early.
-        if (/API key|not set up|Anthropic/i.test(err.message)) break;
+        // A missing key or used-up credit fails every recipe the same way; stop early.
+        if (err.code === 'no_credit' || /API key|not set up|Anthropic/i.test(err.message)) break;
       }
     }
     bar.style.width = '100%';
     const ok = todo.length - failed.length;
-    toast(`${ok === 1 ? t('1 recipe translated') : t('{n} recipes translated', { n: ok })} · ${t('about {cost}', { cost: usd(spent) })}`);
+    toast(`${ok === 1 ? t('1 recipe translated') : t('{n} recipes translated', { n: ok })} · ${t('about {cost}', { cost: state.hosted ? money(spent, state.currency, state.user?.country) : usd(spent) })}`);
     await renderSettings();
     if (failed.length) {
       $('.card-box').insertAdjacentHTML('beforeend', `<div class="lang-note error"><strong>${esc(t('Not translated:'))}</strong><ul>${failed.map((f) => `<li>${esc(f)}</li>`).join('')}</ul></div>`);
@@ -1664,6 +1692,183 @@ async function chooseLanguage(code) {
   } catch (err) {
     toast(err.message);
   }
+}
+
+
+// ---------- Accounts and credit (hosted version) ----------
+
+function setBalance(balance) {
+  if (balance === undefined || balance === null) return;
+  state.balance = balance;
+  const chip = $('#balance-chip');
+  if (!chip) return;
+  chip.hidden = !state.hosted || !state.user;
+  chip.textContent = `💳 ${money(balance / 100, state.currency, state.user?.country)}`;
+  chip.classList.toggle('low', balance <= 0);
+}
+
+const priceText = (action) => (state.prices ? money((state.prices[action] || 0) / 100, state.currency, state.user?.country) : '');
+// " · ≈ CHF 0.08" after a button that uses Claude, in the hosted version.
+const priceTag = (action) => (state.hosted && state.prices ? ` · ≈ ${priceText(action)}` : '');
+
+function showNoCredit(info) {
+  const box = document.createElement('div');
+  box.className = 'sheet-bg';
+  const needed = info.needed ? money(info.needed / 100, info.currency, state.user?.country) : '';
+  box.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="nc-h">
+      <h2 id="nc-h">💳 ${t('Not enough credit')}</h2>
+      <p>${esc(t('This needs about {needed}. Your credit: {balance}.', { needed, balance: money((info.balance || 0) / 100, info.currency, state.user?.country) }))}</p>
+      <div class="row end"><button class="btn ghost" data-close>${t('Close')}</button><a class="btn primary" href="/account" data-link data-close>${t('Top up credit')}</a></div>
+    </div>`;
+  document.body.appendChild(box);
+  box.addEventListener('click', (e) => { if (e.target === box || e.target.closest('[data-close]')) box.remove(); });
+}
+
+function renderLogin(mode = 'login') {
+  document.title = `${t('Log in')} · Recipe Box`;
+  $('#balance-chip').hidden = true;
+  const country = (() => { for (const l of navigator.languages || []) { const r = String(l).split('-')[1]?.toUpperCase(); if (Kit.COUNTRIES[r]) return r; } return 'DE'; })();
+  view.innerHTML = `
+    <section class="auth">
+      <div class="auth-card">
+        <h1>📖 Recipe Box</h1>
+        <p class="muted">${t('All your recipes in one place: from websites, videos, photos and notes. Cooking mode, shopping list and price comparison included.')}</p>
+        <div class="tabs auth-tabs" role="tablist">
+          <button role="tab" data-mode="login" aria-selected="${mode === 'login'}">${t('Log in')}</button>
+          <button role="tab" data-mode="register" aria-selected="${mode === 'register'}">${t('Create account')}</button>
+        </div>
+        <form class="auth-form" data-auth="${mode}">
+          <label class="field"><span>${t('E-mail')}</span><input name="email" type="email" autocomplete="email" required></label>
+          <label class="field"><span>${t('Password')}</span><input name="password" type="password" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" minlength="${mode === 'login' ? 1 : 8}" required>
+            ${mode === 'register' ? `<small>${t('At least 8 characters.')}</small>` : ''}</label>
+          ${mode === 'register' ? `<label class="field"><span>${t('Country')}</span><select name="country">${Object.keys(Kit.COUNTRIES).map((cc) => `<option value="${cc}" ${cc === country ? 'selected' : ''}>${COUNTRY_FLAGS[cc]} ${esc(countryName(cc))}</option>`).join('')}</select>
+            <small>${t('Sets your currency: CHF in Switzerland, EUR in Germany and Austria.')}</small></label>` : ''}
+          <p class="err" role="alert" id="auth-err"></p>
+          <button class="btn primary" type="submit">${mode === 'login' ? t('Log in') : t('Create account')}</button>
+        </form>
+        <label class="field lang-mini"><span>${t('Language')}</span><select id="login-lang">${LANG_CODES.map((c) => `<option value="${c}" ${c === getLang() ? 'selected' : ''}>${esc(nativeName(c))}</option>`).join('')}</select></label>
+      </div>
+    </section>`;
+  view.onclick = (e) => {
+    const tab = e.target.closest('[data-mode]');
+    if (tab) renderLogin(tab.dataset.mode);
+  };
+  view.onchange = (e) => {
+    if (e.target.id === 'login-lang') { setLang(e.target.value); applyStaticTexts(); renderLogin(mode); }
+  };
+  view.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target.elements;
+    const btn = $('button[type=submit]', e.target);
+    btn.disabled = true;
+    try {
+      const body = { email: f.email.value, password: f.password.value, country: f.country?.value };
+      const { user } = mode === 'login' ? await api.login(body) : await api.register(body);
+      state.user = user;
+      await loadUserState();
+      if (mode === 'register') await chooseLanguage(getLang());
+      if (location.pathname === '/login') history.replaceState(null, '', '/');
+      render();
+      updateCartCount();
+    } catch (err) {
+      $('#auth-err').textContent = err.message;
+      btn.disabled = false;
+    }
+  };
+}
+
+async function loadUserState() {
+  const [config, settings] = await Promise.all([api.config(), api.settings().catch(() => null)]);
+  Object.assign(state, { ai: Boolean(config.ai), user: config.user, currency: config.currency, prices: config.prices });
+  if (settings) state.settings = settings;
+  if (settings?.language && settings.language !== getLang()) { setLang(settings.language); applyStaticTexts(); }
+  setBalance(config.balance);
+}
+
+async function renderAccount() {
+  document.title = `${t('Account & credit')} · Recipe Box`;
+  const params = new URLSearchParams(location.search);
+  if (params.get('paid')) {
+    history.replaceState(null, '', '/account');
+    try {
+      const r = await api.confirmPayment(params.get('paid'));
+      setBalance(r.balance);
+      toast(t('Thank you! Your credit has been topped up.'));
+    } catch (err) { toast(err.message); }
+  } else if (params.get('cancelled')) {
+    history.replaceState(null, '', '/account');
+    toast(t('Payment cancelled. Nothing was charged.'));
+  }
+  const info = await api.billing();
+  if (location.pathname !== '/account') return;
+  setBalance(info.balance);
+  const cur = info.currency;
+  const ACTIONS = { 'read-text': t('Read a recipe from text'), 'read-photo': t('Read a recipe from photos'), translate: t('Translate a recipe'), 'compare-prices': t('Compare supermarket prices') };
+  const when = (iso) => new Date(iso).toLocaleDateString(getLang(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  view.innerHTML = `
+    <section class="settings account">
+      <a href="/" class="back" data-link>← ${t('All recipes')}</a>
+      <h1>${t('Account & credit')}</h1>
+      <section class="card-box">
+        <div class="balance-big"><small class="muted">${t('Your credit')}</small><strong>${esc(money(info.balance / 100, cur, state.user?.country))}</strong></div>
+        ${info.payments ? `
+          <p>${t('Top up:')}</p>
+          <div class="packs">${info.packs.map((a) => `<button class="btn primary" data-pack="${a}">+ ${esc(money(a / 100, cur, state.user?.country))}</button>`).join('')}</div>
+          <p class="muted small">${t('You pay securely with Stripe: card, Apple Pay, Google Pay and, in Switzerland, TWINT.')}</p>`
+        : `<p class="muted">${t('Topping up is not available yet.')}</p>`}
+      </section>
+      <section class="card-box">
+        <h2>${t('What things cost')}</h2>
+        <p class="muted small">${t('Recipes, shopping list and cooking mode are free. Features that use Claude are paid from your credit. These are typical prices; the exact amount depends on the length of the recipe or list.')}</p>
+        <ul class="usage-list">${Object.entries(info.prices).map(([a, v]) => `<li><span>${esc(ACTIONS[a] || a)}</span><span>≈ ${esc(money(v / 100, cur, state.user?.country))}</span></li>`).join('')}</ul>
+      </section>
+      <section class="card-box">
+        <h2>${t('History')}</h2>
+        ${info.history.length ? `<ul class="usage-list">${info.history.map((h) => `<li><span>${esc(h.type === 'charge' ? ACTIONS[h.action] || h.action : h.type === 'welcome' ? t('Welcome credit') : t('Top-up'))} <span class="muted small">${esc(when(h.at))}</span></span><span class="${h.amount < 0 ? '' : 'plus'}">${h.amount > 0 ? '+' : '−'}${esc(money(Math.abs(h.amount) / 100, cur, state.user?.country))}</span></li>`).join('')}</ul>`
+        : `<p class="muted">${t('Nothing yet.')}</p>`}
+      </section>
+      <section class="card-box">
+        <h2>${t('Account')}</h2>
+        <p>${esc(state.user.email)}</p>
+        <div class="row wrap"><button class="btn" data-logout>${t('Log out')}</button><button class="btn danger" data-delete-account>${t('Delete account')}</button></div>
+        <form class="delete-form" data-delete-form hidden>
+          <p class="err">${t('This deletes all your recipes, photos, your shopping list and any remaining credit. It cannot be undone.')}</p>
+          <label class="field"><span>${t('Password')}</span><input name="password" type="password" autocomplete="current-password" required></label>
+          <button class="btn danger" type="submit">${t('Delete account for good')}</button>
+        </form>
+      </section>
+    </section>`;
+  view.onclick = async (e) => {
+    const pack = e.target.closest('[data-pack]');
+    if (pack) {
+      pack.disabled = true;
+      pack.innerHTML = `<span class="spinner"></span>${t('Opening payment…')}`;
+      try {
+        const { url } = await api.checkout(Number(pack.dataset.pack));
+        location.href = url;
+      } catch (err) { toast(err.message); renderAccount(); }
+      return;
+    }
+    if (e.target.closest('[data-logout]')) {
+      await api.logout();
+      state.user = null;
+      history.replaceState(null, '', '/');
+      return render();
+    }
+    if (e.target.closest('[data-delete-account]')) { $('[data-delete-form]').hidden = false; $('[data-delete-form] input').focus(); }
+  };
+  view.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!e.target.matches('[data-delete-form]')) return;
+    try {
+      await api.deleteAccount(e.target.elements.password.value);
+      state.user = null;
+      history.replaceState(null, '', '/');
+      toast(t('Your account has been deleted.'));
+      render();
+    } catch (err) { toast(err.message); }
+  };
 }
 
 // ---------- Menu & backups ----------
@@ -1713,7 +1918,23 @@ if ('serviceWorker' in navigator) {
 // Start: pick up the saved language (or the browser's, the first time) before drawing anything.
 (async function boot() {
   applyStaticTexts();
-  const [settings, config] = await Promise.all([api.settings().catch(() => null), api.config().catch(() => null)]);
+  const config = await api.config().catch(() => null);
+  state.hosted = Boolean(config?.hosted);
+  if (state.hosted) {
+    // Hosted version: log in first; the language comes from the browser until then.
+    if (!config.user) {
+      const browser = (navigator.languages || [navigator.language || 'en']).map((l) => String(l).slice(0, 2).toLowerCase());
+      let saved = null;
+      try { saved = localStorage.getItem('rb-lang'); } catch { /* storage blocked */ }
+      if (!saved) { setLang(browser.find((l) => LANG_CODES.includes(l)) || 'en'); applyStaticTexts(); }
+      return render();
+    }
+    await loadUserState();
+    render();
+    updateCartCount();
+    return;
+  }
+  const settings = await api.settings().catch(() => null);
   state.ai = Boolean(config?.ai);
   if (settings) state.settings = settings;
   if (settings && !settings.language) {

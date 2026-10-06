@@ -5,6 +5,9 @@
 //   HOST               interface to bind            (default 0.0.0.0 so phones on your Wi-Fi can reach it)
 //   DATA_DIR           where recipes + files live   (default ./data)
 //   ANTHROPIC_API_KEY  optional: lets Claude read recipes from photos and pasted text
+//
+// Hosted version for several people (accounts + prepaid credit, see README):
+//   MULTI_USER=1, PUBLIC_URL, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, TRUST_PROXY=1 behind a proxy
 
 const http = require('http');
 const fs = require('fs');
@@ -13,6 +16,9 @@ const { Store } = require('./lib/store');
 const importer = require('./lib/importer');
 const ai = require('./lib/ai');
 const places = require('./lib/places');
+const billing = require('./lib/billing');
+const { Accounts } = require('./lib/accounts');
+const { Credits, PACKS, priceList, config: creditConfig } = require('./lib/credits');
 const { normalizeRecipe, detectLang, LANGUAGES, formatAmount } = require('./public/recipe-kit');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -91,7 +97,7 @@ async function readJson(req, limit = MAX_JSON) {
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   // Client-side routes all load the app shell.
-  if (rel === '/' || rel === '/share' || rel.startsWith('/recipe/') || rel === '/new' || rel === '/settings' || rel === '/shopping') rel = '/index.html';
+  if (['/', '/share', '/new', '/settings', '/shopping', '/account', '/login'].includes(rel) || rel.startsWith('/recipe/')) rel = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 403, 'Forbidden');
   fs.stat(file, (err, stat) => {
@@ -146,9 +152,24 @@ function serveFile(req, res, store, fileId) {
   });
 }
 
-async function handleApi(req, res, store, url) {
+// Run a Claude action: check the credit first (hosted version), then record and
+// charge its measured cost, even when the action fails part-way.
+async function withClaude(ctx, action, run) {
+  await ctx.beforeAi(action);
+  let cost = null;
+  let billed = null;
+  try {
+    const result = await run((c) => { cost = c; });
+    return { result, billed: cost ? (billed = await ctx.afterAi(action, cost)) : null };
+  } finally {
+    if (cost && !billed) await ctx.afterAi(action, cost);
+  }
+}
+
+async function handleApi(req, res, ctx, url) {
   const parts = url.pathname.split('/').filter(Boolean).slice(1); // drop "api"
   const method = req.method;
+  const { store } = ctx;
 
   if (parts[0] === 'recipes') {
     const [, id, sub, fileId] = parts;
@@ -182,12 +203,11 @@ async function handleApi(req, res, store, url) {
       if ((recipe.lang || detectLang(recipe)) === to) {
         return send(res, 200, recipe.lang === to ? recipe : await store.update(id, { lang: to }));
       }
-      let cost = null;
-      const result = await ai.translateRecipe(recipe, to, { onCost: (c) => { cost = store.usage.record('translate', c); } });
+      const { result, billed } = await withClaude(ctx, 'translate', (onCost) => ai.translateRecipe(recipe, to, { onCost }));
       const from = LANGUAGES[result.sourceLanguage] ? result.sourceLanguage : null;
-      if (from === to) return send(res, 200, await store.update(id, { lang: to }));
+      if (from === to) return send(res, 200, { ...(await store.update(id, { lang: to })), ...billed });
       const { sourceLanguage, ...fields } = result;
-      return send(res, 200, { ...(await store.applyTranslation(id, fields, { from, to })), costUsd: cost?.usd ?? null });
+      return send(res, 200, { ...(await store.applyTranslation(id, fields, { from, to })), ...billed });
     } else if (sub === 'original' && method === 'POST') {
       const restored = await store.restoreOriginal(id);
       return restored ? send(res, 200, restored) : send(res, 404, { error: 'This recipe has no original to go back to' });
@@ -211,11 +231,10 @@ async function handleApi(req, res, store, url) {
 
   if (parts[0] === 'tags' && method === 'GET') return send(res, 200, store.tags());
 
-  if (parts[0] === 'config' && method === 'GET') return send(res, 200, { ai: ai.isEnabled() });
 
   if (parts[0] === 'usage' && method === 'GET') return send(res, 200, store.usage.summary());
 
-  if (parts[0] === 'shopping') return handleShopping(req, res, store, parts.slice(1));
+  if (parts[0] === 'shopping') return handleShopping(req, res, ctx, parts.slice(1));
 
   if (parts[0] === 'location') {
     if (method === 'DELETE') return send(res, 200, await store.updateSettings({ location: null }));
@@ -236,9 +255,8 @@ async function handleApi(req, res, store, url) {
 
   if (parts[0] === 'ai' && parts[1] === 'extract' && method === 'POST') {
     const body = await readJson(req, MAX_AI);
-    let cost = null;
-    const result = await ai.extractRecipe(body, { onCost: (c) => { cost = store.usage.record(body.images ? 'read-photo' : 'read-text', c); } });
-    return send(res, 200, { ...draft({ ...result, source: { type: body.images ? 'file' : 'text', url: '' } }), costUsd: cost?.usd ?? null });
+    const { result, billed } = await withClaude(ctx, body.images ? 'read-photo' : 'read-text', (onCost) => ai.extractRecipe(body, { onCost }));
+    return send(res, 200, { ...draft({ ...result, source: { type: body.images ? 'file' : 'text', url: '' } }), ...billed });
   }
 
   if (parts[0] === 'import' && method === 'POST') {
@@ -267,7 +285,8 @@ async function handleApi(req, res, store, url) {
   return send(res, 404, { error: 'Unknown endpoint' });
 }
 
-async function handleShopping(req, res, store, parts) {
+async function handleShopping(req, res, ctx, parts) {
+  const { store } = ctx;
   const list = store.shopping;
   const [what, id] = parts;
   const method = req.method;
@@ -298,20 +317,20 @@ async function handleShopping(req, res, store, parts) {
     const open = list.open();
     // If the supermarket map is down, Claude works out the local chains itself.
     const stores = await places.nearbySupermarkets(location).catch(() => []);
-    let cost = null;
-    const result = await ai.compareSupermarkets({
+    if (!open.length) throw new HttpError(400, 'The shopping list has nothing left to buy.');
+    const { result, billed } = await withClaude(ctx, 'compare-prices', (onCost) => ai.compareSupermarkets({
       items: open.map((i) => ({ name: i.name, amount: formatAmount(i.qty, i.unit) })),
       place: location,
       stores,
       lang: store.getSettings().language || 'de',
-      onCost: (c) => { cost = store.usage.record('compare-prices', c); },
-    });
+      onCost,
+    }));
     const comparison = {
       ...result,
       at: new Date().toISOString(),
       place: location.label,
       country: location.country,
-      costUsd: cost?.usd ?? null,
+      ...billed,
       itemKeys: open.map((i) => i.key),
       nearby: stores.map(({ chain, branch, address, km }) => ({ chain, branch, address, km })),
     };
@@ -320,7 +339,136 @@ async function handleShopping(req, res, store, parts) {
   return send(res, 404, { error: 'Unknown endpoint' });
 }
 
-function createServer(store) {
+// ---------- Hosted version: accounts, credit, Stripe ----------
+
+function cookie(req, name) {
+  const m = new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.headers.cookie || '');
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
+function clientIp(req) {
+  if (process.env.TRUST_PROXY === '1') {
+    const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (fwd) return fwd;
+  }
+  return req.socket.remoteAddress || '';
+}
+
+function baseUrl(req) {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/+$/, '');
+  const proto = process.env.TRUST_PROXY === '1' && req.headers['x-forwarded-proto'] ? req.headers['x-forwarded-proto'] : 'http';
+  return `${proto}://${req.headers.host}`;
+}
+
+function sessionCookie(req, token, maxAge) {
+  const secure = baseUrl(req).startsWith('https://') ? '; Secure' : '';
+  return `rb_session=${token ? encodeURIComponent(token) : ''}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${token ? maxAge : 0}${secure}`;
+}
+
+async function handleAuth(req, res, hosted, action) {
+  const { accounts } = hosted;
+  const ip = clientIp(req);
+  if (action === 'register' && req.method === 'POST') {
+    const user = await accounts.register(await readJson(req), ip);
+    const { token, maxAge } = await accounts.createSession(user);
+    return send(res, 201, { user: accounts.publicUser(user) }, { 'Set-Cookie': sessionCookie(req, token, maxAge) });
+  }
+  if (action === 'login' && req.method === 'POST') {
+    const user = await accounts.login(await readJson(req), ip);
+    const { token, maxAge } = await accounts.createSession(user);
+    return send(res, 200, { user: accounts.publicUser(user) }, { 'Set-Cookie': sessionCookie(req, token, maxAge) });
+  }
+  if (action === 'logout' && req.method === 'POST') {
+    await accounts.endSession(cookie(req, 'rb_session'));
+    return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '') });
+  }
+  if (action === 'delete' && req.method === 'POST') {
+    const user = accounts.userForToken(cookie(req, 'rb_session'));
+    if (!user) return send(res, 401, { error: 'Please log in.', code: 'login' });
+    const { password } = await readJson(req);
+    await accounts.remove(user.id, password);
+    hosted.registry.delete(user.id);
+    await fs.promises.rm(path.join(hosted.dataDir, 'users', user.id), { recursive: true, force: true });
+    return send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '') });
+  }
+  return send(res, 404, { error: 'Unknown endpoint' });
+}
+
+async function handleBilling(req, res, hosted, ctx, action) {
+  const { user, credits } = ctx;
+  if (!action && req.method === 'GET') {
+    return send(res, 200, { ...credits.get(), packs: PACKS, prices: priceList(credits.currency), payments: billing.isEnabled() });
+  }
+  if (action === 'checkout' && req.method === 'POST') {
+    const { amount, lang } = await readJson(req);
+    if (!PACKS.includes(amount)) throw new HttpError(400, 'Choose one of the offered amounts.');
+    return send(res, 200, await billing.createCheckout({ user, amountMinor: amount, currency: credits.currency, baseUrl: baseUrl(req), lang }));
+  }
+  if (action === 'confirm' && req.method === 'POST') {
+    // Back from Stripe: book the payment right away instead of waiting for the webhook.
+    const { sessionId } = await readJson(req);
+    const paid = billing.creditFromSession(await billing.retrieveSession(sessionId));
+    if (!paid || paid.userId !== user.id) throw new HttpError(402, 'The payment has not gone through (yet).');
+    const added = await credits.add(paid.amountMinor, { type: 'purchase', ref: paid.ref });
+    return send(res, 200, { ...credits.get(), added });
+  }
+  return send(res, 404, { error: 'Unknown endpoint' });
+}
+
+async function handleWebhook(req, res, hosted) {
+  const raw = await readBody(req, MAX_JSON);
+  const event = billing.verifyWebhook(raw, req.headers['stripe-signature']);
+  if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+    const paid = billing.creditFromSession(event.data.object);
+    const user = paid && hosted.accounts.findById(paid.userId);
+    if (user) {
+      const { credits } = await hosted.userContext(user);
+      if (paid.currency === credits.currency) await credits.add(paid.amountMinor, { type: 'purchase', ref: paid.ref });
+      else console.error(`Payment ${paid.ref} in ${paid.currency} does not match the account currency ${credits.currency}; not booked.`);
+    }
+  }
+  return send(res, 200, { received: true });
+}
+
+// Single-user (self-hosted) context: no accounts, no charges, costs only logged.
+function localContext(store) {
+  return {
+    store,
+    user: null,
+    credits: null,
+    beforeAi: async () => {},
+    afterAi: async (action, cost) => ({ costUsd: store.usage.record(action, cost).usd }),
+  };
+}
+
+function createServer(store, options = {}) {
+  const hosted = options.accounts ? { ...options, registry: new Map() } : null;
+  if (hosted) {
+    // Each account has its own folder: data/users/<id>/ with recipes, files, list, settings and credit.
+    hosted.userContext = (user) => {
+      if (!hosted.registry.has(user.id)) {
+        hosted.registry.set(user.id, (async () => {
+          const dir = path.join(hosted.dataDir, 'users', user.id);
+          const userStore = await new Store(dir).init();
+          const credits = await new Credits(dir, user.currency).init({ startCredit: creditConfig().startCredit });
+          return {
+            store: userStore,
+            user,
+            credits,
+            beforeAi: async (action) => credits.ensureFor(action),
+            afterAi: async (action, cost) => {
+              userStore.usage.record(action, cost);
+              const amount = await credits.charge(action, cost.usd);
+              return { charged: { amount, currency: credits.currency, balance: credits.balance } };
+            },
+          };
+        })());
+      }
+      return hosted.registry.get(user.id);
+    };
+  }
+  const single = store ? localContext(store) : null;
+
   return http.createServer(async (req, res) => {
     let url;
     try {
@@ -329,19 +477,49 @@ function createServer(store) {
       return send(res, 400, 'Bad request');
     }
     try {
-      if (url.pathname.startsWith('/api/')) return await handleApi(req, res, store, url);
-      if (url.pathname.startsWith('/files/') && (req.method === 'GET' || req.method === 'HEAD')) {
-        return serveFile(req, res, store, url.pathname.split('/')[2] || '');
+      const { pathname } = url;
+      let ctx = single;
+      let user = null;
+      if (hosted) {
+        user = hosted.accounts.userForToken(cookie(req, 'rb_session'));
+        if (pathname === '/api/billing/webhook' && req.method === 'POST') return await handleWebhook(req, res, hosted);
+        // Changes must come from the app itself: browsers won't send this header cross-site without asking.
+        if (pathname.startsWith('/api/') && !['GET', 'HEAD'].includes(req.method) && req.headers['x-recipe-box'] !== '1') {
+          return send(res, 403, { error: 'Forbidden' });
+        }
+        if (pathname.startsWith('/api/auth/')) return await handleAuth(req, res, hosted, pathname.split('/')[3]);
+        if (user) ctx = await hosted.userContext(user);
       }
-      if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res, url.pathname);
+      if (pathname === '/api/config' && req.method === 'GET') {
+        return send(res, 200, {
+          ai: ai.isEnabled(),
+          hosted: Boolean(hosted),
+          user: hosted ? hosted.accounts.publicUser(user) : null,
+          payments: hosted ? billing.isEnabled() : false,
+          currency: ctx?.credits?.currency || null,
+          balance: ctx?.credits?.balance ?? null,
+          prices: ctx?.credits ? priceList(ctx.credits.currency) : null,
+        });
+      }
+      if (pathname.startsWith('/api/') || pathname.startsWith('/files/')) {
+        if (!ctx) return send(res, 401, { error: 'Please log in.', code: 'login' });
+      }
+      if (hosted && pathname.startsWith('/api/billing')) return await handleBilling(req, res, hosted, ctx, pathname.split('/')[3]);
+      if (pathname.startsWith('/api/')) return await handleApi(req, res, ctx, url);
+      if (pathname.startsWith('/files/') && (req.method === 'GET' || req.method === 'HEAD')) {
+        return serveFile(req, res, ctx.store, pathname.split('/')[2] || '');
+      }
+      if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res, pathname);
       return send(res, 405, 'Method not allowed');
     } catch (err) {
       const status = err.status || (err.name === 'TimeoutError' ? 504 : 500);
-      if (status >= 500 && status !== 502 && status !== 504) console.error(err);
+      if (status >= 500 && status !== 502 && status !== 503 && status !== 504) console.error(err);
       const message = err.name === 'TimeoutError' ? 'The site took too long to respond'
         : err.cause && err.cause.code === 'ENOTFOUND' ? 'Could not find that website'
           : err.message || 'Something went wrong';
-      if (!res.headersSent) send(res, status, { error: message });
+      const extra = err.code && typeof err.code === 'string' && !err.code.startsWith('E') ? { code: err.code } : {};
+      if (err.needed !== undefined) Object.assign(extra, { needed: err.needed, balance: err.balance, currency: err.currency });
+      if (!res.headersSent) send(res, status, { error: message, ...extra });
       else res.end();
     }
   });
@@ -349,12 +527,22 @@ function createServer(store) {
 
 async function main() {
   const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
-  const store = await new Store(dataDir).init();
   const port = Number(process.env.PORT) || 3000;
   const host = process.env.HOST || '0.0.0.0';
-  createServer(store).listen(port, host, () => {
+  let server;
+  if (process.env.MULTI_USER === '1') {
+    const accounts = await new Accounts(dataDir).init();
+    server = createServer(null, { accounts, dataDir });
+    console.log('Hosted version: accounts and prepaid credit are on.');
+    if (!ai.isEnabled()) console.warn('No ANTHROPIC_API_KEY: Claude features are off.');
+    if (!billing.isEnabled()) console.warn('No STRIPE_SECRET_KEY: users cannot top up credit.');
+    if (!process.env.PUBLIC_URL) console.warn('PUBLIC_URL is not set; Stripe will send people back to the address they used.');
+  } else {
+    server = createServer(await new Store(dataDir).init());
+  }
+  server.listen(port, host, () => {
     console.log(`Recipe Box is running at http://localhost:${port}`);
-    console.log(`Saving recipes to ${dataDir}`);
+    console.log(`Saving data to ${dataDir}`);
   });
 }
 
