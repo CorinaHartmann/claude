@@ -181,3 +181,32 @@ test('the location search stays inside the chosen country', async (t) => {
   assert.strictEqual(res.json.location.country, 'CH');
   assert.strictEqual(res.json.location.label, '8001 Zürich');
 });
+
+test('postcodes are looked up as postcodes, in the chosen country', async (t) => {
+  const realFetch = places.deps.fetch;
+  t.after(() => { places.deps.fetch = realFetch; });
+  const seen = [];
+  places.deps.fetch = async (url) => {
+    seen.push(url);
+    const u = new URL(url);
+    if (u.pathname === '/reverse') return new Response(JSON.stringify({ address: { postcode: '1010', city: 'Lausanne', country_code: 'ch' } }));
+    if (u.searchParams.get('postalcode') === '1010' && u.searchParams.get('countrycodes') === 'ch') {
+      // A postcode hit without a town name, plus a wrong neighbour.
+      return new Response(JSON.stringify([
+        { lat: '46.6', lon: '6.7', address: { postcode: '1011', country_code: 'ch' } },
+        { lat: '46.53', lon: '6.65', address: { postcode: '1010', country_code: 'ch' } },
+      ]));
+    }
+    if (u.searchParams.get('postalcode') === '3012') return new Response('[]');
+    // Free text matches a house number elsewhere: must not be used.
+    return new Response(JSON.stringify([{ lat: '47.0', lon: '8.0', address: { postcode: '6003', city: 'Luzern', country_code: 'ch' } }]));
+  };
+  const place = await places.geocode('1010', 'de', 'CH');
+  assert.strictEqual(place.label, '1010 Lausanne');
+  assert.strictEqual(place.lat, 46.53);
+  assert.ok(seen[0].includes('postalcode=1010') && !seen[0].includes('&q='));
+
+  await assert.rejects(places.geocode('3012', 'de', 'CH'), (err) => err.status === 404);
+  await assert.rejects(places.geocode('8001', 'de', 'DE'), (err) => err.status === 400 && /5 digits/.test(err.message));
+  await assert.rejects(places.geocode('10115', 'de', 'AT'), (err) => err.status === 400 && /4 digits/.test(err.message));
+});

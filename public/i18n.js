@@ -707,6 +707,96 @@ const STRINGS = {
     "Il tuo account è stato eliminato.",
     "Tu cuenta se ha eliminado.",
     "Je account is verwijderd."],
+  "German postcodes have 5 digits. For Switzerland or Austria, choose that country first.": [
+    "Deutsche Postleitzahlen haben 5 Stellen. Für die Schweiz oder Österreich wähle zuerst das Land.",
+    "Les codes postaux allemands ont 5 chiffres. Pour la Suisse ou l’Autriche, choisis d’abord le pays.",
+    "I CAP tedeschi hanno 5 cifre. Per la Svizzera o l’Austria, scegli prima il paese.",
+    "Los códigos postales alemanes tienen 5 cifras. Para Suiza o Austria, elige primero el país.",
+    "Duitse postcodes hebben 5 cijfers. Kies voor Zwitserland of Oostenrijk eerst dat land."],
+  "Postcodes in Switzerland and Austria have 4 digits. For Germany, choose Germany first.": [
+    "Postleitzahlen in der Schweiz und in Österreich haben 4 Stellen. Für Deutschland wähle zuerst Deutschland.",
+    "Les codes postaux en Suisse et en Autriche ont 4 chiffres. Pour l’Allemagne, choisis d’abord l’Allemagne.",
+    "I CAP in Svizzera e Austria hanno 4 cifre. Per la Germania, scegli prima la Germania.",
+    "Los códigos postales de Suiza y Austria tienen 4 cifras. Para Alemania, elige primero Alemania.",
+    "Postcodes in Zwitserland en Oostenrijk hebben 4 cijfers. Kies voor Duitsland eerst Duitsland."],
+  "This postcode could not be found. Check the postcode and the country.": [
+    "Diese Postleitzahl wurde nicht gefunden. Prüfe die Postleitzahl und das Land.",
+    "Ce code postal est introuvable. Vérifie le code postal et le pays.",
+    "Questo CAP non è stato trovato. Controlla il CAP e il paese.",
+    "No se ha encontrado este código postal. Comprueba el código postal y el país.",
+    "Deze postcode is niet gevonden. Controleer de postcode en het land."],
+  "Enter a postcode or a town.": [
+    "Gib eine Postleitzahl oder einen Ort ein.",
+    "Saisis un code postal ou une ville.",
+    "Inserisci un CAP o una località.",
+    "Introduce un código postal o una localidad.",
+    "Voer een postcode of plaats in."],
+  "That place could not be found. Try a postcode and town, e.g. \"10115 Berlin\".": [
+    "Dieser Ort wurde nicht gefunden. Versuche es mit Postleitzahl und Ort, z. B. „8001 Zürich“.",
+    "Ce lieu est introuvable. Essaie avec un code postal et une ville, p. ex. « 1003 Lausanne ».",
+    "Questo luogo non è stato trovato. Prova con CAP e località, ad es. «6900 Lugano».",
+    "No se ha encontrado este lugar. Prueba con código postal y localidad, p. ej. «10115 Berlin».",
+    "Deze plaats is niet gevonden. Probeer postcode en plaats, bijv. „10115 Berlin”."],
+  "No address found for this location.": [
+    "Für diesen Standort wurde keine Adresse gefunden.",
+    "Aucune adresse trouvée pour cet emplacement.",
+    "Nessun indirizzo trovato per questa posizione.",
+    "No se ha encontrado ninguna dirección para esta ubicación.",
+    "Geen adres gevonden voor deze locatie."],
+  "OpenStreetMap is busy right now. Try again in a minute.": [
+    "OpenStreetMap ist gerade ausgelastet. Versuche es in einer Minute nochmals.",
+    "OpenStreetMap est surchargé. Réessaie dans une minute.",
+    "OpenStreetMap è occupato. Riprova tra un minuto.",
+    "OpenStreetMap está saturado. Inténtalo de nuevo en un minuto.",
+    "OpenStreetMap is nu druk. Probeer het over een minuut opnieuw."],
+  "OpenStreetMap could not be reached. Check the internet connection and try again.": [
+    "OpenStreetMap ist nicht erreichbar. Prüfe die Internetverbindung und versuche es nochmals.",
+    "OpenStreetMap est injoignable. Vérifie la connexion internet et réessaie.",
+    "OpenStreetMap non è raggiungibile. Controlla la connessione internet e riprova.",
+    "No se puede acceder a OpenStreetMap. Comprueba la conexión a internet e inténtalo de nuevo.",
+    "OpenStreetMap is niet bereikbaar. Controleer de internetverbinding en probeer het opnieuw."],
+  "Not enough credit for this. Top up your balance under Account.": [
+    "Nicht genug Guthaben dafür. Lade dein Guthaben unter Konto auf.",
+    "Crédit insuffisant. Recharge ton crédit dans Compte.",
+    "Credito insufficiente. Ricarica il credito in Account.",
+    "Saldo insuficiente. Recarga tu saldo en Cuenta.",
+    "Niet genoeg tegoed. Waardeer je tegoed op onder Account."],
+  "E-mail or password is wrong.": [
+    "E-Mail oder Passwort ist falsch.",
+    "E-mail ou mot de passe incorrect.",
+    "E-mail o password errati.",
+    "El correo o la contraseña no son correctos.",
+    "E-mail of wachtwoord is onjuist."],
+  "The password needs at least 8 characters.": [
+    "Das Passwort braucht mindestens 8 Zeichen.",
+    "Le mot de passe doit comporter au moins 8 caractères.",
+    "La password deve avere almeno 8 caratteri.",
+    "La contraseña necesita al menos 8 caracteres.",
+    "Het wachtwoord moet minstens 8 tekens hebben."],
+  "Enter a valid e-mail address.": [
+    "Gib eine gültige E-Mail-Adresse ein.",
+    "Saisis une adresse e-mail valide.",
+    "Inserisci un indirizzo e-mail valido.",
+    "Introduce un correo electrónico válido.",
+    "Voer een geldig e-mailadres in."],
+  "There is already an account with this e-mail address. Log in instead.": [
+    "Mit dieser E-Mail-Adresse gibt es schon ein Konto. Melde dich stattdessen an.",
+    "Un compte existe déjà avec cette adresse e-mail. Connecte-toi plutôt.",
+    "Esiste già un account con questo indirizzo e-mail. Accedi invece.",
+    "Ya existe una cuenta con este correo. Inicia sesión.",
+    "Er bestaat al een account met dit e-mailadres. Log in."],
+  "Too many attempts. Wait 15 minutes and try again.": [
+    "Zu viele Versuche. Warte 15 Minuten und versuche es dann nochmals.",
+    "Trop de tentatives. Attends 15 minutes et réessaie.",
+    "Troppi tentativi. Attendi 15 minuti e riprova.",
+    "Demasiados intentos. Espera 15 minutos e inténtalo de nuevo.",
+    "Te veel pogingen. Wacht 15 minuten en probeer het opnieuw."],
+  "The password is wrong.": [
+    "Das Passwort ist falsch.",
+    "Le mot de passe est incorrect.",
+    "La password è errata.",
+    "La contraseña no es correcta.",
+    "Het wachtwoord is onjuist."],
 };
 
 // Language names as written in each app language (de, en, fr, it, es, nl).

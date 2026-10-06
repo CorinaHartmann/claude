@@ -33,7 +33,8 @@ async function request(method, path, body, headers = {}) {
   if (!res.ok) {
     if (res.status === 401 && data.code === 'login' && state.hosted) { state.user = null; render(); }
     if (res.status === 402 && data.code === 'no_credit') showNoCredit(data);
-    throw Object.assign(new Error(data.error || t('Request failed ({status})', { status: res.status })), { status: res.status, code: data.code });
+    // Server messages are English; show them in the app language when a translation exists.
+    throw Object.assign(new Error(data.error ? t(data.error) : t('Request failed ({status})', { status: res.status })), { status: res.status, code: data.code });
   }
   if (data && data.charged) setBalance(data.charged.balance);
   return data;
