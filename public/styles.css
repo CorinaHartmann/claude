@@ -338,6 +338,51 @@ dialog::backdrop { background: rgb(20 14 10 / 45%); backdrop-filter: blur(2px); 
 .tr-progress .bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
 .tr-progress p { margin: 0; font-size: 14px; }
 
+/* ---------- Shopping list ---------- */
+.cart { position: relative; font-size: 20px; text-decoration: none; }
+.cart-count { position: absolute; top: -2px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.recipe-cta { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 16px; }
+.recipe-cta .cook-start { margin-top: 0; }
+.sheet-bg { position: fixed; inset: 0; z-index: 70; background: rgb(20 14 10 / 45%); display: flex; align-items: flex-end; justify-content: center; }
+.sheet { background: var(--surface); width: min(560px, 100%); max-height: 90vh; overflow-y: auto; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 10px; }
+.sheet h2 { font-size: 20px; }
+.sheet p { margin: 0; }
+@media (min-width: 600px) { .sheet-bg { align-items: center; } .sheet { border-radius: 18px; } }
+.shopping { max-width: 760px; margin: 0 auto; display: grid; gap: 14px; }
+.shop-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.shop-head h1 { font-size: 28px; }
+.shop-cat { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 6px 0 -6px; }
+.shop-list { list-style: none; padding: 0; margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.shop-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--border); }
+.shop-item:last-child { border-bottom: 0; }
+.shop-item label { display: flex; gap: 12px; align-items: center; flex: 1; min-width: 0; padding: 8px 0; cursor: pointer; }
+.shop-item input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.shop-item label > span { min-width: 0; overflow-wrap: anywhere; }
+.shop-item small { display: block; font-size: 12px; }
+.shop-item b { font-variant-numeric: tabular-nums; }
+.shop-item.done label > span { text-decoration: line-through; color: var(--muted); }
+.shop-done summary { cursor: pointer; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+.shop-actions { justify-content: flex-start; }
+.small-empty { padding: 24px 12px; }
+.loc-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.loc-form { display: grid; gap: 8px; }
+.nearby .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.compare-result { display: grid; gap: 10px; margin-top: 4px; }
+.winner { display: grid; gap: 2px; background: var(--accent-soft); border-radius: 12px; padding: 12px 14px; }
+.winner strong { font-size: 22px; }
+.winner-total { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--accent); }
+.ranking { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.ranking li { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+.ranking li.best { border-color: var(--accent); }
+.ranking summary { display: flex; justify-content: space-between; gap: 10px; cursor: pointer; font-weight: 600; }
+.rk-total { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.price-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 4px; font-size: 14px; }
+.price-list li { display: flex; justify-content: space-between; gap: 10px; border: 0; padding: 2px 0; border-bottom: 1px dashed var(--border); border-radius: 0; }
+.price-list li > span:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.badge.offer { background: var(--accent-soft); color: var(--accent); font-weight: 600; margin-left: 4px; }
+.price-list .badge { margin-left: 4px; font-size: 11px; }
+.sources ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; overflow-wrap: anywhere; }
+
 /* ---------- Small screens ---------- */
 @media (max-width: 720px) {
   .topbar { flex-wrap: wrap; gap: 8px; }

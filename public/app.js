@@ -48,6 +48,15 @@ const api = {
   saveSettings: (s) => request('PUT', '/api/settings', s),
   translate: (id, to) => request('POST', `/api/recipes/${id}/translate`, { to }),
   restoreOriginal: (id) => request('POST', `/api/recipes/${id}/original`),
+  shopping: () => request('GET', '/api/shopping'),
+  shopAdd: (lines, source) => request('POST', '/api/shopping/items', { lines, source }),
+  shopUpdate: (id, patch) => request('PATCH', `/api/shopping/items/${id}`, patch),
+  shopRemove: (id) => request('DELETE', `/api/shopping/items/${id}`),
+  shopClear: (checked) => request('POST', '/api/shopping/clear', { checked }),
+  setLocation: (body) => request('POST', '/api/location', body),
+  clearLocation: () => request('DELETE', '/api/location'),
+  stores: () => request('GET', '/api/shopping/stores'),
+  compare: () => request('POST', '/api/shopping/compare'),
   importBackup: (text) => request('POST', '/api/import/backup', text, { 'Content-Type': 'application/json' }),
   upload: (id, file) => request('POST', `/api/recipes/${id}/files`, file, {
     'Content-Type': file.type || 'application/octet-stream',
@@ -233,12 +242,14 @@ async function render() {
   $('#menu').hidden = true;
   view.onclick = null;
   view.onchange = null;
+  view.onsubmit = null;
   const path = location.pathname;
   let m;
   try {
     if (path === '/share') return handleShare();
     if (path === '/new') return renderEditor(null);
     if (path === '/settings') return renderSettings();
+    if (path === '/shopping') return renderShopping();
     if ((m = /^\/recipe\/([a-f0-9]+)\/edit$/.exec(path))) return renderEditor(Kit.normalizeRecipe(await api.get(m[1])));
     if ((m = /^\/recipe\/([a-f0-9]+)$/.exec(path))) {
       if (state.lastRecipe !== m[1]) state.showOriginal = false;
@@ -437,7 +448,10 @@ function renderRecipe(rec) {
       ${embed ? `<div class="video${embed.tall ? ' tall' : ''}"><iframe src="${esc(embed.src)}" title="${t('Recipe video')}" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen loading="lazy"></iframe></div>`
       : r.videoUrl ? `<a class="video-link" href="${esc(r.videoUrl)}" target="_blank" rel="noopener"><span class="play">▶</span><span><strong>${t('Watch the video')}</strong><small>${esc(hostOf(r.videoUrl))}</small></span></a>` : ''}
 
-      ${r.instructions.some((l) => !l.startsWith('## ')) ? `<button class="btn primary cook-start" data-cook>▶ ${t('Start cooking')}</button>` : ''}
+      <div class="recipe-cta">
+        ${r.instructions.some((l) => !l.startsWith('## ')) ? `<button class="btn primary cook-start" data-cook>▶ ${t('Start cooking')}</button>` : ''}
+        ${r.ingredients.some((l) => !l.startsWith('## ')) ? `<button class="btn cook-start" data-to-list>🛒 ${t('Add to shopping list')}</button>` : ''}
+      </div>
       ${hasBody ? `
       <div class="columns">
         <section>
@@ -485,6 +499,7 @@ function renderRecipe(rec) {
     const target = e.target;
     if (target.closest('[data-tstart]')) return; // timers are handled globally
     if (target.closest('[data-cook]')) return openCook(r);
+    if (target.closest('[data-to-list]')) return openAddToList(r);
     const serv = target.closest('[data-serv]');
     if (serv) {
       const b = servingsBase(r);
@@ -1177,6 +1192,273 @@ renderTimers();
 if (timers.some((t) => !t.paused && !t.done)) tick();
 
 
+
+// ---------- Shopping list ----------
+
+const CATEGORY_LABELS = {
+  produce: () => t('Fruit & vegetables'), bakery: () => t('Bread & bakery'), meat: () => t('Meat & fish'),
+  dairy: () => t('Dairy & eggs'), frozen: () => t('Frozen'), pantry: () => t('Pantry'),
+  spices: () => t('Spices'), drinks: () => t('Drinks'), other: () => t('Other'),
+};
+const km = (v) => `${Number(v).toLocaleString(getLang(), { maximumFractionDigits: 1 })} km`;
+const itemText = (i) => [Kit.formatAmount(i.qty, i.unit), i.name].filter(Boolean).join(' ');
+
+async function updateCartCount(list) {
+  try {
+    const data = list || await api.shopping();
+    const n = data.items.filter((i) => !i.checked).length;
+    const badge = $('#cart-count');
+    badge.textContent = n;
+    badge.hidden = !n;
+  } catch { /* server not reachable; the next page load will show it */ }
+}
+
+// "Add to shopping list" on a recipe: everything ticked; untick what's already at home.
+function openAddToList(r) {
+  const factor = servingsFactor(r);
+  const lines = r.ingredients.filter((l) => !l.startsWith('## ')).map((l) => {
+    const sc = Kit.scaleIngredient(l, factor);
+    return sc ? `${sc.qty}${sc.rest}` : l;
+  });
+  const box = document.createElement('div');
+  box.className = 'sheet-bg';
+  box.innerHTML = `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="atl-h">
+      <h2 id="atl-h">🛒 ${t('Add to shopping list')}</h2>
+      <p class="muted">${esc(t('For {amount}. Untick what you already have at home.', { amount: amountLabel(r) }))}</p>
+      <div class="row wrap"><button type="button" class="btn small" data-all="1">${t('Tick all')}</button><button type="button" class="btn small" data-all="0">${t('Untick all')}</button></div>
+      <ul class="ingredients atl-list">${lines.map((l, i) => `<li><label><input type="checkbox" data-line="${i}" checked><span>${ingredientHtml(l, 1)}</span></label></li>`).join('')}</ul>
+      <div class="row end">
+        <button type="button" class="btn ghost" data-close>${t('Cancel')}</button>
+        <button type="button" class="btn primary" data-add-lines></button>
+      </div>
+    </div>`;
+  document.body.appendChild(box);
+  const count = () => $$('[data-line]:checked', box).length;
+  const label = () => { $('[data-add-lines]', box).textContent = count() === 1 ? t('Add 1 item') : t('Add {n} items', { n: count() }); $('[data-add-lines]', box).disabled = !count(); };
+  label();
+  const close = () => box.remove();
+  box.addEventListener('change', label);
+  box.addEventListener('click', async (e) => {
+    if (e.target === box || e.target.closest('[data-close]')) return close();
+    const all = e.target.closest('[data-all]');
+    if (all) { $$('[data-line]', box).forEach((c) => { c.checked = all.dataset.all === '1'; }); return label(); }
+    if (e.target.closest('[data-add-lines]')) {
+      const chosen = $$('[data-line]:checked', box).map((c) => lines[Number(c.dataset.line)]);
+      try {
+        const data = await api.shopAdd(chosen, { id: r.id, title: r.title });
+        updateCartCount(data);
+        toast(chosen.length === 1 ? t('1 item added to the shopping list') : t('{n} items added to the shopping list', { n: chosen.length }));
+        close();
+      } catch (err) { toast(err.message); }
+    }
+  });
+  $('[data-add-lines]', box).focus();
+}
+
+function money(value, currency) {
+  try {
+    return new Intl.NumberFormat(getLang(), { style: 'currency', currency: currency || 'EUR' }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency || ''}`.trim();
+  }
+}
+
+function locationForm(loc) {
+  const canLocate = 'geolocation' in navigator && window.isSecureContext;
+  if (loc) {
+    return `<div class="loc-row"><span>📍 <strong>${esc(loc.label || loc.city)}</strong></span>
+      <button type="button" class="btn ghost small" data-loc-change>${t('Change')}</button></div>`;
+  }
+  return `<form class="loc-form" data-loc-form>
+      <label class="field"><span>${t('Your postcode or town')}</span>
+        <input name="query" placeholder="${t('e.g. 10115 Berlin')}" autocomplete="postal-code" required></label>
+      <div class="row wrap">
+        <button class="btn primary" type="submit">${t('Save location')}</button>
+        ${canLocate ? `<button type="button" class="btn" data-loc-gps>📍 ${t('Use my current location')}</button>` : ''}
+      </div>
+      <p class="muted small">${t('Only used to find supermarkets near you. It is saved on your computer.')}</p>
+    </form>`;
+}
+
+// Handles the location form wherever it is shown. Returns true when it handled the event.
+async function handleLocationEvent(e, rerender) {
+  if (e.type === 'submit' && e.target.matches('[data-loc-form]')) {
+    e.preventDefault();
+    const btn = $('button[type=submit]', e.target);
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>${t('Looking up…')}`;
+    try {
+      state.settings = await api.setLocation({ query: e.target.elements.query.value });
+      toast(t('Location saved: {place}', { place: state.settings.location.label }));
+      rerender();
+    } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = t('Save location'); }
+    return true;
+  }
+  if (e.type !== 'click') return false;
+  if (e.target.closest('[data-loc-change]')) {
+    state.settings = await api.clearLocation();
+    rerender();
+    return true;
+  }
+  const gps = e.target.closest('[data-loc-gps]');
+  if (gps) {
+    gps.disabled = true;
+    gps.innerHTML = `<span class="spinner"></span>${t('Looking up…')}`;
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        state.settings = await api.setLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        toast(t('Location saved: {place}', { place: state.settings.location.label }));
+        rerender();
+      } catch (err) { toast(err.message); gps.disabled = false; gps.textContent = t('Use my current location'); }
+    }, () => {
+      toast(t('Your location could not be read. Enter your postcode instead.'));
+      gps.disabled = false;
+      gps.textContent = t('Use my current location');
+    }, { timeout: 15000, maximumAge: 600000 });
+    return true;
+  }
+  return false;
+}
+
+function comparisonHtml(c, items) {
+  if (!c) return '';
+  const open = new Set(items.filter((i) => !i.checked).map((i) => i.key));
+  const changed = c.itemKeys && (c.itemKeys.length !== open.size || c.itemKeys.some((k) => !open.has(k)));
+  const stores = [...(c.stores || [])].sort((a, b) => a.total - b.total);
+  const best = stores[0];
+  const date = new Date(c.at).toLocaleDateString(getLang(), { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  return `<div class="compare-result">
+    ${changed ? `<p class="lang-note">${t('The list has changed since this comparison. Compare again for current numbers.')}</p>` : ''}
+    ${best ? `<div class="winner"><span class="muted small">${t('Cheapest for your list')}</span><strong>${esc(best.chain)}</strong><span class="winner-total">${esc(money(best.total, c.currency))}</span></div>` : ''}
+    ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
+    <ol class="ranking">
+      ${stores.map((st, i) => {
+        const near = (c.nearby || []).find((n) => n.chain.toLowerCase() === st.chain.toLowerCase());
+        return `<li class="${i === 0 ? 'best' : ''}">
+          <details>
+            <summary><span class="rk-name">${esc(st.chain)}${near ? ` <span class="muted small">· ${km(near.km)}</span>` : ''}</span><span class="rk-total">${esc(money(st.total, c.currency))}</span></summary>
+            ${near?.address ? `<p class="muted small">${esc(near.branch)} · ${esc(near.address)}</p>` : ''}
+            <ul class="price-list">${(st.items || []).map((it) => `<li><span>${esc(it.item)}${it.product && it.product !== it.item ? ` <span class="muted small">(${esc(it.product)})</span>` : ''}
+              ${it.offer ? `<span class="badge offer">${t('Offer')}</span>` : ''}${it.estimated ? `<span class="badge">${t('estimated')}</span>` : ''}</span><span>${esc(money(it.price, c.currency))}</span></li>`).join('')}</ul>
+            ${st.missing?.length ? `<p class="muted small">${esc(t('Not found here: {items}', { items: st.missing.join(', ') }))}</p>` : ''}
+            ${st.note ? `<p class="muted small">${esc(st.note)}</p>` : ''}
+          </details></li>`;
+      }).join('')}
+    </ol>
+    <p class="muted small">${esc(t('Estimate from {date} for {place}, based on prices Claude found online. Prices in your branch can differ.', { date, place: c.place || '' }))}</p>
+    ${c.sources?.length ? `<details class="sources"><summary class="small">${t('Sources')}</summary><ul>${c.sources.map((src) => `<li><a href="${esc(src.url)}" target="_blank" rel="noopener">${esc(src.title || hostOf(src.url))}</a></li>`).join('')}</ul></details>` : ''}
+  </div>`;
+}
+
+async function renderShopping() {
+  document.title = `${t('Shopping list')} · Recipe Box`;
+  const data = await api.shopping();
+  if (location.pathname !== '/shopping') return;
+  updateCartCount(data);
+  const items = data.items;
+  const open = items.filter((i) => !i.checked);
+  const done = items.filter((i) => i.checked);
+  const loc = state.settings.location;
+  const groups = Kit.CATEGORY_ORDER.map((cat) => [cat, open.filter((i) => (i.category || 'other') === cat)]).filter(([, list]) => list.length);
+  const row = (i) => `<li class="shop-item${i.checked ? ' done' : ''}">
+      <label><input type="checkbox" data-item="${i.id}" ${i.checked ? 'checked' : ''}>
+        <span><b>${esc(Kit.formatAmount(i.qty, i.unit))}</b> ${esc(i.name)}
+        ${i.sources?.length ? `<small class="muted">${esc(i.sources.map((x) => x.title).join(', '))}</small>` : ''}</span></label>
+      <button class="btn ghost small" data-del-item="${i.id}" aria-label="${esc(t('Remove {name}', { name: i.name }))}">✕</button>
+    </li>`;
+
+  view.innerHTML = `
+    <section class="shopping">
+      <a href="/" class="back" data-link>← ${t('All recipes')}</a>
+      <div class="shop-head">
+        <h1>🛒 ${t('Shopping list')}</h1>
+        <span class="muted">${esc(open.length === 1 ? t('1 item to buy') : t('{n} items to buy', { n: open.length }))}</span>
+      </div>
+      <form class="row" data-add-item>
+        <input name="text" placeholder="${t('Add something, e.g. 1 l milk')}" aria-label="${t('Add to the list')}" autocomplete="off">
+        <button class="btn primary" type="submit">${t('Add')}</button>
+      </form>
+
+      ${!items.length ? `<div class="empty small-empty"><div class="big">🧺</div><p>${t('The list is empty. Open a recipe and choose “Add to shopping list”, or type something above.')}</p></div>` : ''}
+      ${groups.map(([cat, list]) => `<h2 class="shop-cat">${esc(CATEGORY_LABELS[cat]())}</h2><ul class="shop-list">${list.map(row).join('')}</ul>`).join('')}
+      ${done.length ? `<details class="shop-done" ${open.length ? '' : 'open'}><summary>${esc(t('In the basket ({n})', { n: done.length }))}</summary><ul class="shop-list">${done.map(row).join('')}</ul></details>` : ''}
+      ${items.length ? `<div class="row wrap shop-actions">
+        <button class="btn small" data-copy-list>📋 ${t('Copy list')}</button>
+        ${done.length ? `<button class="btn small" data-clear-done>${t('Remove ticked items')}</button>` : ''}
+        <button class="btn small danger" data-clear-all>${t('Clear list')}</button>
+      </div>` : ''}
+
+      <section class="card-box compare">
+        <h2>💶 ${t('Where is it cheapest?')}</h2>
+        ${locationForm(loc)}
+        ${loc ? `<div id="nearby" class="nearby"><span class="spinner"></span> ${t('Looking for supermarkets nearby…')}</div>` : ''}
+        ${loc && state.ai && open.length ? `
+          <button class="btn primary" id="compare-btn">${esc(open.length === 1 ? t('Compare prices for 1 item') : t('Compare prices for {n} items', { n: open.length }))}</button>
+          <p class="muted small">${t('Claude searches current prices and offers of these supermarkets online and estimates the total for each. This takes about a minute and costs roughly 20–50 cents on your Anthropic account.')}</p>` : ''}
+        ${loc && !state.ai ? `<p class="muted small">${t('To compare prices, start the app with an Anthropic API key (see “Language & settings”).')}</p>` : ''}
+        <div id="compare-out">${comparisonHtml(data.comparison, items)}</div>
+      </section>
+    </section>`;
+
+  if (loc) {
+    api.stores().then(({ stores }) => {
+      const box = $('#nearby');
+      if (!box) return;
+      box.innerHTML = stores.length
+        ? `<p class="muted small">${esc(t('Supermarkets within 3 km:'))}</p><div class="chips">${stores.map((st) => `<span class="badge" title="${esc(st.address || '')}">${esc(st.chain)} · ${km(st.km)}</span>`).join('')}</div>`
+        : `<p class="muted small">${t('No supermarkets found within 3 km.')}</p>`;
+    }).catch((err) => { const box = $('#nearby'); if (box) box.innerHTML = `<p class="muted small">${esc(err.message)}</p>`; });
+  }
+
+  const rerender = () => renderShopping();
+  view.onsubmit = async (e) => {
+    e.preventDefault(); // every form here is handled in the page
+    if (await handleLocationEvent(e, rerender)) return;
+    if (e.target.matches('[data-add-item]')) {
+      const text = e.target.elements.text.value.trim();
+      if (!text) return;
+      await api.shopAdd([text]);
+      rerender();
+    }
+  };
+  view.onclick = async (e) => {
+    if (await handleLocationEvent(e, rerender)) return;
+    const del = e.target.closest('[data-del-item]');
+    if (del) { await api.shopRemove(del.dataset.delItem); return rerender(); }
+    if (e.target.closest('[data-clear-done]')) { await api.shopClear(true); return rerender(); }
+    if (e.target.closest('[data-clear-all]')) {
+      if (!confirm(t('Remove everything from the shopping list?'))) return;
+      await api.shopClear(false);
+      return rerender();
+    }
+    if (e.target.closest('[data-copy-list]')) {
+      const text = groups.map(([cat, list]) => `${CATEGORY_LABELS[cat]()}\n${list.map((i) => `- ${itemText(i)}`).join('\n')}`).join('\n\n');
+      try { await navigator.clipboard.writeText(text); toast(t('List copied')); } catch { toast(t('Copying isn’t allowed here. Select the list and copy it by hand.')); }
+      return;
+    }
+    const cmp = e.target.closest('#compare-btn');
+    if (cmp) {
+      cmp.disabled = true;
+      cmp.innerHTML = `<span class="spinner"></span>${t('Comparing prices… this takes about a minute')}`;
+      try {
+        await api.compare();
+        return rerender();
+      } catch (err) {
+        toast(err.message);
+        cmp.disabled = false;
+        cmp.textContent = t('Try again');
+      }
+    }
+  };
+  view.onchange = async (e) => {
+    const box = e.target.closest('[data-item]');
+    if (!box) return;
+    await api.shopUpdate(box.dataset.item, { checked: box.checked });
+    rerender();
+  };
+}
+
 // ---------- Languages ----------
 
 const langName = (code) => languageName(code);
@@ -1242,6 +1524,11 @@ async function renderSettings() {
       </fieldset>
 
       <section class="card-box">
+        <h2>📍 ${t('Location')}</h2>
+        ${locationForm(state.settings.location)}
+      </section>
+
+      <section class="card-box">
         <h2>${t('Translate recipes')}</h2>
         ${state.ai ? `
           <label class="check"><input type="checkbox" id="auto-tr" ${state.settings.autoTranslate ? 'checked' : ''}>
@@ -1264,6 +1551,7 @@ async function renderSettings() {
       </section>
     </section>`;
 
+  view.onsubmit = (e) => { e.preventDefault(); handleLocationEvent(e, renderSettings); };
   view.onchange = async (e) => {
     if (e.target.name === 'lang') {
       await chooseLanguage(e.target.value);
@@ -1275,6 +1563,7 @@ async function renderSettings() {
     }
   };
   view.onclick = async (e) => {
+    if (await handleLocationEvent(e, renderSettings)) return;
     const btn = e.target.closest('#translate-all');
     if (!btn) return;
     btn.disabled = true;
@@ -1372,4 +1661,5 @@ if ('serviceWorker' in navigator) {
     applyStaticTexts();
   }
   render();
+  updateCartCount();
 })();

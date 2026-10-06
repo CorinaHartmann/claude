@@ -263,6 +263,104 @@ function fmtClock(ms) {
 }
 
 
+// ---------- Shopping list ----------
+// Units that can be added up across recipes, converted to a base unit.
+const BASE_UNITS = { g: ['g', 1], kg: ['g', 1000], mg: ['g', 0.001], ml: ['ml', 1], cl: ['ml', 10], dl: ['ml', 100], l: ['ml', 1000] };
+const UNIT_CANON = [
+  [/^cups?$/i, 'cup'], [/^tbsp$/i, 'tbsp'], [/^tsp$/i, 'tsp'], [/^EL$/, 'EL'], [/^TL$/, 'TL'], [/^Msp\.?$/i, 'Msp.'], [/^Pck\.?$/i, 'Pck.'],
+  [/^Prisen?$/i, 'Prise'], [/^pinch(es)?$/i, 'pinch'], [/^dash(es)?$/i, 'dash'], [/^sticks?$/i, 'stick'], [/^cans?$/i, 'can'],
+  [/^Dosen?$/i, 'Dose'], [/^Becher$/i, 'Becher'], [/^Bund$/i, 'Bund'], [/^bunch(es)?$/i, 'bunch'], [/^handful$/i, 'handful'], [/^Handvoll$/i, 'Handvoll'],
+  [/^oz$/i, 'oz'], [/^lb$/i, 'lb'],
+];
+
+function canonUnit(u) {
+  if (BASE_UNITS[u.toLowerCase()]) return u.toLowerCase();
+  for (const [re, out] of UNIT_CANON) if (re.test(u)) return out;
+  return u;
+}
+
+// "200 g Mehl, gesiebt" -> { qty: 200, unit: 'g', name: 'Mehl' }. Ranges count their upper end.
+function parseIngredientLine(line) {
+  const s = oneLine(line);
+  if (!s || s.startsWith('#')) return null;
+  let qty = null, unit = '', rest = s;
+  const m = QTY.exec(s);
+  if (m) {
+    qty = toNum(m[3] || m[1]) || null;
+    rest = s.slice(m[0].length);
+  }
+  const u = MEASURED.exec(rest);
+  if (u && qty !== null) {
+    unit = canonUnit(u[1]);
+    rest = rest.slice(u[0].length);
+  }
+  let name = rest.replace(/\s*\([^)]*\)/g, ' ').split(/,|;| - | – /)[0]
+    .replace(/^\s*(of|de|d'|du|des|di|del|della|dello|degli|van)\s+/i, '').trim();
+  if (!name) name = s;
+  return { qty, unit, name };
+}
+
+function shoppingKey(name) {
+  let k = name.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim();
+  // English plurals, so "2 lemons" and "1 lemon" end up together.
+  if (/^[a-z ]+$/.test(k) && k.length > 3) k = k.replace(/ies$/, 'y').replace(/(oes|ches|shes|xes)$/, (x) => x.slice(0, -2)).replace(/([^s])s$/, '$1');
+  return k;
+}
+
+// Add up an amount on the base unit, so 500 g + 1 kg = 1500 g.
+function toBase(qty, unit) {
+  const b = BASE_UNITS[unit];
+  return b ? { qty: qty * b[1], unit: b[0] } : { qty, unit };
+}
+
+function formatAmount(qty, unit) {
+  if (qty === null || qty === undefined) return '';
+  let q = qty, u = unit;
+  const quarters = (x) => Math.abs(x * 4 - Math.round(x * 4)) < 1e-6;
+  // 1500 g -> 1½ kg, but 1200 g stays 1200 g rather than turning into a rounded 1¼ kg.
+  if (u === 'g' && q >= 1000 && quarters(q / 1000)) { q /= 1000; u = 'kg'; }
+  if (u === 'ml' && q >= 1000 && quarters(q / 1000)) { q /= 1000; u = 'l'; }
+  let shown;
+  if (q >= 10) shown = String(Math.round(q));
+  else {
+    const f = fmtQty(q); // "2½", "1" or, when it isn't a simple fraction, a decimal
+    shown = f.includes('.') ? String(Math.round(q * 10) / 10) : f;
+  }
+  return u ? `${shown} ${u}` : shown;
+}
+
+// Supermarket sections, recognised by common words in the six app languages.
+const CATEGORY_WORDS = {
+  produce: 'apfel äpfel banane bananen zitrone zitronen limette orange birne beeren erdbeeren himbeeren heidelbeeren trauben tomate tomaten gurke paprika zucchini aubergine kartoffel kartoffeln süßkartoffel karotte karotten möhre möhren zwiebel zwiebeln knoblauch lauch porree sellerie salat spinat rucola brokkoli blumenkohl kohl pilze champignons avocado ingwer kräuter petersilie basilikum schnittlauch koriander minze dill rosmarin thymian kürbis mais erbsen bohnen datteln apple apples banana lemon lime orange pear berries strawberries raspberries blueberries grapes tomato tomatoes cucumber pepper peppers zucchini eggplant potato potatoes carrot carrots onion onions garlic leek celery lettuce spinach arugula broccoli cauliflower cabbage mushrooms avocado ginger herbs parsley basil chives cilantro coriander mint dill rosemary thyme pumpkin squash corn peas beans dates pomme citron poire fraises tomates concombre poivron courgette aubergine pomme de terre carotte oignon ail poireau salade épinards champignons persil basilic mela limone pera fragole pomodori cetriolo peperone zucchine melanzana patate carota cipolla aglio porro insalata spinaci funghi prezzemolo basilico manzana limón pera fresas tomate pepino pimiento calabacín berenjena patata zanahoria cebolla ajo puerro lechuga espinacas champiñones perejil albahaca appel citroen peer aardbeien tomaat komkommer paprika courgette aardappel wortel ui knoflook prei sla spinazie champignons peterselie basilicum',
+  dairy: 'milch butter sahne schlagsahne schmand saure quark joghurt jogurt käse parmesan mozzarella feta frischkäse mascarpone ricotta eier ei crème fraîche milk butter cream yogurt yoghurt cheese parmesan mozzarella feta ricotta mascarpone eggs egg lait beurre crème yaourt fromage œufs oeufs latte burro panna yogurt formaggio uova leche mantequilla nata yogur queso huevos melk boter room yoghurt kaas eieren',
+  meat: 'fleisch hackfleisch hack rind rindfleisch schwein schweinefleisch hähnchen hühnchen huhn pute speck schinken wurst lachs thunfisch fisch garnelen meat beef pork chicken turkey bacon ham sausage salmon tuna fish shrimp prawns viande bœuf boeuf porc poulet jambon saumon thon poisson crevettes carne manzo maiale pollo prosciutto salmone tonno pesce gamberi ternera cerdo jamón salmón atún pescado gambas vlees rundvlees varkensvlees kip ham zalm tonijn vis garnalen',
+  bakery: 'brot brötchen toast baguette tortilla tortillas wraps bread rolls toast baguette pain pane pan brood',
+  frozen: 'tiefkühl tk gefroren frozen surgelé surgelati congelado diepvries',
+  drinks: 'wein rotwein weißwein bier saft wasser mineralwasser wine beer juice water vin bière jus eau vino birra succo acqua cerveza zumo agua wijn bier sap water',
+  spices: 'salz pfeffer zimt paprikapulver curry kreuzkümmel muskat oregano chili vanille vanillezucker gewürz gewürze lorbeer salt pepper cinnamon paprika curry cumin nutmeg oregano chili vanilla spice spices sel poivre cannelle sale pepe cannella sal pimienta canela zout peper kaneel',
+  pantry: 'mehl zucker puderzucker brauner backpulver natron hefe stärke speisestärke nudeln pasta spaghetti reis couscous linsen kichererbsen haferflocken öl olivenöl essig honig senf ketchup sojasauce brühe gemüsebrühe tomatenmark passierte dosentomaten kakao schokolade nüsse mandeln walnüsse haselnüsse kokosmilch flour sugar baking powder soda yeast starch cornstarch noodles pasta spaghetti rice couscous lentils chickpeas oats oil olive vinegar honey mustard ketchup soy stock broth paste cocoa chocolate nuts almonds walnuts hazelnuts coconut farine sucre levure pâtes riz lentilles huile vinaigre miel moutarde chocolat amandes farina zucchero lievito riso lenticchie olio aceto miele cioccolato mandorle harina azúcar levadura arroz lentejas aceite vinagre miel chocolate almendras bloem suiker gist rijst linzen olie azijn honing chocolade amandelen',
+};
+const CATEGORY_SETS = Object.fromEntries(Object.entries(CATEGORY_WORDS).map(([k, v]) => [k, new Set(v.split(' '))]));
+const CATEGORY_ORDER = ['produce', 'bakery', 'meat', 'dairy', 'frozen', 'pantry', 'spices', 'drinks', 'other'];
+
+function categorize(name) {
+  const words = String(name).toLowerCase().match(/\p{L}+/gu) || [];
+  // Later words usually name the thing ("gehackte Petersilie", "olive oil"), so check from the end.
+  const has = (cat, w) => CATEGORY_SETS[cat]?.has(w) || CATEGORY_SETS[cat]?.has(shoppingKey(w));
+  for (let i = words.length - 1; i >= 0; i--) {
+    for (const cat of CATEGORY_ORDER) if (has(cat, words[i])) return cat;
+  }
+  // German compounds: "Weizenmehl", "Rinderhackfleisch" (ends with it), "Knoblauchzehen" (starts with it)
+  const last = words[words.length - 1] || '';
+  for (const test of [(w) => w.length >= 4 && last.endsWith(w), (w) => w.length >= 5 && last.startsWith(w)]) {
+    for (const cat of CATEGORY_ORDER) {
+      if (!CATEGORY_SETS[cat]) continue;
+      for (const w of CATEGORY_SETS[cat]) if (test(w)) return cat;
+    }
+  }
+  return 'other';
+}
+
 // ---------- Languages ----------
 const LANGUAGES = {
   de: { name: 'Deutsch', english: 'German' },
@@ -302,5 +400,6 @@ return {
   normIngredient, normStep, normTime, normServings, parseServings, servingsUnit, normTitle, normalizeRecipe,
   findDurations, fmtDur, fmtClock,
   LANGUAGES, detectLang,
+  parseIngredientLine, shoppingKey, toBase, formatAmount, categorize, CATEGORY_ORDER,
 };
 });

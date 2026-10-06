@@ -24,6 +24,13 @@ Then you can:
 - **attach** more photos or files to any recipe and pick one as the cover
 - **back up** everything (recipes *and* files) to one file, and restore it
 
+### Shopping list and the cheapest supermarket
+
+- **🛒 Add to shopping list** on a recipe uses the amount you picked with the − / + stepper. Untick what you already have at home, and only the rest goes on the list.
+- The list adds up the same ingredient from several recipes (250 g + 500 g Mehl = 750 g), shows which recipes need it, and sorts it by supermarket section. Tick things off while you shop, add your own items, or copy the list as text.
+- **Where is it cheapest?** Enter your postcode or town once (or use your current location on the computer running the app). The app lists the supermarkets within 3 km, from OpenStreetMap, free.
+- With Claude switched on, **Compare prices** has Claude search current prices and this week's offers of those chains online and estimate the total for your list at each. You get the cheapest one, a ranking with distances, the price per item (offers and estimates marked) and the sources. It takes about a minute and costs roughly 20–50 cents. The result is an estimate; prices in a particular branch can differ.
+
 ### Languages
 
 The app speaks German, English, French, Italian, Spanish and Dutch. Choose the language under **⋮ → Language & settings**; the first time, the app picks your browser's language.
@@ -59,7 +66,7 @@ Your recipes are saved in `data/`: `recipes.json` plus a `files/` folder. Copy t
 | `PORT`     | `3000`    | Port to listen on                          |
 | `HOST`     | `0.0.0.0` | Interface to bind. Use `127.0.0.1` to keep it to this computer only |
 | `DATA_DIR` | `./data`  | Where recipes and files are stored         |
-| `ANTHROPIC_API_KEY` | (none) | Optional. Lets Claude read recipes from photos and messy pasted text, and translate recipes |
+| `ANTHROPIC_API_KEY` | (none) | Optional. Lets Claude read recipes from photos and messy pasted text, translate recipes and compare supermarket prices |
 
 ### Letting Claude read recipes (optional)
 
@@ -94,7 +101,9 @@ npm test
 server.js          HTTP server: JSON API, file uploads, static files
 lib/store.js       Recipe storage (JSON file plus attachment files, atomic writes)
 lib/importer.js    Website/video link import (schema.org JSON-LD, microdata, Open Graph) and pasted-text parsing
-lib/ai.js          Optional: Claude reads recipes from text or photos (needs ANTHROPIC_API_KEY)
+lib/ai.js          Optional: Claude reads and translates recipes and compares supermarket prices (needs ANTHROPIC_API_KEY)
+lib/shopping.js    Shopping list storage (data/shopping.json), adding up amounts across recipes
+lib/places.js      Location lookup and nearby supermarkets from OpenStreetMap (Nominatim, Overpass)
 public/recipe-kit.js  Shared by server and browser: formatting, servings and amounts, timer durations, language detection
 public/i18n.js     App texts in German, English, French, Italian, Spanish and Dutch
 public/            The web app (plain HTML/CSS/JS, installable as a PWA, works offline for recipes you've opened)
@@ -118,7 +127,16 @@ test/              Tests (node:test)
 | POST   | `/api/import/url`                  | `{ "url": "…" }` → draft recipe (not saved)      |
 | POST   | `/api/import/text`                 | `{ "text": "…" }` → draft recipe (not saved)     |
 | GET    | `/api/config`                      | `{ "ai": true/false }`: whether Claude reading is on |
-| GET/PUT | `/api/settings`                   | `{ "language": "de", "autoTranslate": true }`    |
+| GET/PUT | `/api/settings`                   | `{ "language": "de", "autoTranslate": true, "location": {…} }` |
+| POST   | `/api/location`                    | `{ "query": "10115 Berlin" }` or `{ "lat", "lon" }`: look up and save the location |
+| DELETE | `/api/location`                    | Forget the location                              |
+| GET    | `/api/shopping`                    | The shopping list and the last price comparison  |
+| POST   | `/api/shopping/items`              | `{ "lines": ["200 g Mehl"], "source": { "id", "title" } }` or `{ "text": "…" }` |
+| PATCH  | `/api/shopping/items/:id`          | `{ "checked": true }`                            |
+| DELETE | `/api/shopping/items/:id`          |                                                  |
+| POST   | `/api/shopping/clear`              | `{ "checked": true }` removes ticked items; `{}` empties the list |
+| GET    | `/api/shopping/stores`             | Supermarkets within 3 km of the saved location   |
+| POST   | `/api/shopping/compare`            | Price comparison by Claude (needs an API key)    |
 | POST   | `/api/recipes/:id/translate`       | `{ "to": "en" }`: translate; the original is kept in `original` |
 | POST   | `/api/recipes/:id/original`        | Put the original text back                       |
 | POST   | `/api/ai/extract`                  | `{ "text": "…" }` or `{ "images": [{ "type", "data" }] }` → draft recipe (not saved) |

@@ -12,7 +12,8 @@ const path = require('path');
 const { Store } = require('./lib/store');
 const importer = require('./lib/importer');
 const ai = require('./lib/ai');
-const { normalizeRecipe, detectLang, LANGUAGES } = require('./public/recipe-kit');
+const places = require('./lib/places');
+const { normalizeRecipe, detectLang, LANGUAGES, formatAmount } = require('./public/recipe-kit');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_UPLOAD = 200 * 1024 * 1024;
@@ -90,7 +91,7 @@ async function readJson(req, limit = MAX_JSON) {
 function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
   // Client-side routes all load the app shell.
-  if (rel === '/' || rel === '/share' || rel.startsWith('/recipe/') || rel === '/new' || rel === '/settings') rel = '/index.html';
+  if (rel === '/' || rel === '/share' || rel.startsWith('/recipe/') || rel === '/new' || rel === '/settings' || rel === '/shopping') rel = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 403, 'Forbidden');
   fs.stat(file, (err, stat) => {
@@ -211,6 +212,20 @@ async function handleApi(req, res, store, url) {
 
   if (parts[0] === 'config' && method === 'GET') return send(res, 200, { ai: ai.isEnabled() });
 
+  if (parts[0] === 'shopping') return handleShopping(req, res, store, parts.slice(1));
+
+  if (parts[0] === 'location') {
+    if (method === 'DELETE') return send(res, 200, await store.updateSettings({ location: null }));
+    if (method === 'POST') {
+      const body = await readJson(req);
+      const lang = store.getSettings().language || 'de';
+      const place = Number.isFinite(body.lat) && Number.isFinite(body.lon)
+        ? await places.reverseGeocode(body.lat, body.lon, lang)
+        : await places.geocode(body.query, lang);
+      return send(res, 200, await store.updateSettings({ location: place }));
+    }
+  }
+
   if (parts[0] === 'settings') {
     if (method === 'GET') return send(res, 200, store.getSettings());
     if (method === 'PUT') return send(res, 200, await store.updateSettings(await readJson(req)));
@@ -244,6 +259,54 @@ async function handleApi(req, res, store, url) {
     });
   }
 
+  return send(res, 404, { error: 'Unknown endpoint' });
+}
+
+async function handleShopping(req, res, store, parts) {
+  const list = store.shopping;
+  const [what, id] = parts;
+  const method = req.method;
+  if (!what && method === 'GET') return send(res, 200, list.get());
+  if (what === 'items' && !id && method === 'POST') {
+    const body = await readJson(req);
+    const lines = Array.isArray(body.lines) ? body.lines : [body.text];
+    return send(res, 200, await list.add(lines.filter((l) => typeof l === 'string'), body.source));
+  }
+  if (what === 'items' && id && (method === 'PATCH' || method === 'PUT')) {
+    const item = await list.update(id, await readJson(req));
+    return item ? send(res, 200, item) : send(res, 404, { error: 'Item not found' });
+  }
+  if (what === 'items' && id && method === 'DELETE') {
+    return (await list.remove(id)) ? send(res, 204, '') : send(res, 404, { error: 'Item not found' });
+  }
+  if (what === 'clear' && method === 'POST') {
+    const { checked } = await readJson(req);
+    return send(res, 200, await list.clear(Boolean(checked)));
+  }
+  const location = store.getSettings().location;
+  if (what === 'stores' && method === 'GET') {
+    if (!location) throw new HttpError(400, 'Set your location first.');
+    return send(res, 200, { location, stores: await places.nearbySupermarkets(location) });
+  }
+  if (what === 'compare' && method === 'POST') {
+    if (!location) throw new HttpError(400, 'Set your location first.');
+    const open = list.open();
+    const stores = await places.nearbySupermarkets(location);
+    const result = await ai.compareSupermarkets({
+      items: open.map((i) => ({ name: i.name, amount: formatAmount(i.qty, i.unit) })),
+      place: location,
+      stores,
+      lang: store.getSettings().language || 'de',
+    });
+    const comparison = {
+      ...result,
+      at: new Date().toISOString(),
+      place: location.label,
+      itemKeys: open.map((i) => i.key),
+      nearby: stores.map(({ chain, branch, address, km }) => ({ chain, branch, address, km })),
+    };
+    return send(res, 200, await list.setComparison(comparison));
+  }
   return send(res, 404, { error: 'Unknown endpoint' });
 }
 

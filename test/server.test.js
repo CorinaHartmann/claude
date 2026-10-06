@@ -182,7 +182,7 @@ test('reading with Claude is reported as off without an API key', async (t) => {
 test('language setting is saved', async (t) => {
   const s = await startServer();
   t.after(s.stop);
-  assert.deepStrictEqual((await s.call('GET', '/api/settings')).json, { language: null, autoTranslate: true });
+  assert.deepStrictEqual((await s.call('GET', '/api/settings')).json, { language: null, autoTranslate: true, location: null });
   assert.strictEqual((await s.call('PUT', '/api/settings', { language: 'fr' })).json.language, 'fr');
   assert.strictEqual((await s.call('PUT', '/api/settings', { language: 'xx' })).json.language, 'fr');
   const reloaded = await new Store(s.dir).init();
